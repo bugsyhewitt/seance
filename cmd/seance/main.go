@@ -12,8 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	ghprovider "github.com/bugsyhewitt/seance/internal/ingestion/github"
-	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	"github.com/bugsyhewitt/seance/pkg/config"
 )
 
@@ -43,13 +41,8 @@ func runScan(_ *cobra.Command, _ []string) error {
 	defer cancel()
 
 	fmt.Fprintf(os.Stderr, "séance %s — listening to what the dead repos whisper\n", cfg.Version)
-	fmt.Fprintf(os.Stderr, "pipeline not yet implemented — scaffold only\n")
 
-	_ = ghprovider.New(cfg.GitHubToken)
-	_ = ndjson.New(os.Stdout)
-
-	<-ctx.Done()
-	return nil
+	return runPipeline(ctx, cfg)
 }
 
 func main() {
