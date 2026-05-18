@@ -1,0 +1,10 @@
+{
+  "sha": "abc123def456abc123def456abc123def456abc1",
+  "files": [
+    {
+      "filename": ".env",
+      "status": "added",
+      "patch": "@@ -0,0 +1,3 @@\n+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n+REGION=us-east-1"
+    }
+  ]
+}
