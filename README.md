@@ -32,9 +32,13 @@ Part of the graveyard toolkit alongside
 séance is **fast, not instant**. The GitHub public events API is explicitly
 documented as not a real-time feed. Expect:
 
-- **Typical**: 5–15 minutes from push to detection
-- **Worst case**: Up to a few hours during API delays
-- **Coverage**: ~15% of public push events at a time (rate-limit constraint)
+- **Typical**: 5–30 minutes from push to detection
+- **Worst case**: Hours during API delays
+- **Coverage**: a delayed, bounded subset of public push activity — bounded by
+  the events endpoint's pagination depth (max ~300 events per poll window).
+  The exact fraction of total GitHub push traffic is unknown and not published
+  by GitHub. Run with `--token` and watch the live metrics output for real
+  throughput numbers in your environment.
 
 The value is catching secrets before they are exploited, not before the
 developer notices the typo. Many leaked credentials persist for days or weeks.
@@ -161,8 +165,10 @@ séance is designed to operate politely within GitHub's API limits:
 - Authenticated: 5,000 requests/hour (one GitHub account)
 - Unauthenticated: 60 requests/hour (not suitable for continuous use)
 
-The pre-filter stage discards ~85% of commits before making any fetch
-requests, keeping séance well within budget (~960 req/hr typical).
+The pre-filter stage discards commits with no interesting files, bot authors,
+or oversized changesets before making any fetch requests, keeping séance well
+within budget. Actual pre-filter survival rate and fetch volume are reported
+in the live metrics output (`séance metrics │ ...` on stderr).
 
 Multiple tokens on one GitHub account do **not** raise the ceiling — the
 5,000/hr limit is per account, not per token.
