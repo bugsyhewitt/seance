@@ -2,6 +2,7 @@ package scan_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
@@ -39,11 +40,17 @@ func TestEngine_FindsAWSKey(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("expected 1 finding, got %d", n)
 	}
-	if findings[0].Redacted == "" {
+	redacted := findings[0].Redacted
+	if redacted == "" {
 		t.Error("Redacted must not be empty")
 	}
-	if len(findings[0].Redacted) >= 20 && !containsStars(findings[0].Redacted) {
-		t.Error("Redacted value should be masked with stars")
+	// AKIAIOSFODNN7EXAMPLE is 20 chars (< minRevealLen=24), so expect fingerprint.
+	if !strings.HasPrefix(redacted, "sha256:") && !containsStars(redacted) {
+		t.Errorf("expected sha256 fingerprint or starred redaction, got %q", redacted)
+	}
+	// Must never contain raw secret material.
+	if strings.Contains(redacted, "AKIAIOSFODNN7EXAMPLE") {
+		t.Error("Redacted must not contain raw secret")
 	}
 }
 

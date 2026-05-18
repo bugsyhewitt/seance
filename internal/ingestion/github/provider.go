@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -48,11 +49,12 @@ type Metrics struct {
 
 // Provider polls the GitHub public events API and emits PushEvent commits.
 type Provider struct {
-	token        string
-	baseURL      string
-	pollInterval int // seconds; updated from X-Poll-Interval header
-	client       *http.Client
-	Metrics      Metrics
+	token             string
+	baseURL           string
+	pollInterval      int // seconds; updated from X-Poll-Interval header
+	LowBudgetInterval time.Duration // how long to back off when rate limit is low; default 5m
+	client            *http.Client
+	Metrics           Metrics
 }
 
 // New returns a GitHub provider. token may be empty for unauthenticated
@@ -67,10 +69,11 @@ func NewWithBaseURL(token, baseURL string) *Provider {
 		baseURL = defaultBaseURL
 	}
 	p := &Provider{
-		token:        token,
-		baseURL:      baseURL,
-		pollInterval: defaultPollInterval,
-		client:       &http.Client{Timeout: 30 * time.Second},
+		token:             token,
+		baseURL:           baseURL,
+		pollInterval:      defaultPollInterval,
+		LowBudgetInterval: 5 * time.Minute,
+		client:            &http.Client{Timeout: 30 * time.Second},
 	}
 	p.Metrics.RateLimitRemaining = -1
 	return p
@@ -94,6 +97,7 @@ func (p *Provider) Stream(ctx context.Context) (<-chan ingestion.CommitEvent, <-
 
 func (p *Provider) poll(ctx context.Context, events chan<- ingestion.CommitEvent, errs chan<- error) {
 	var etag string
+	var inBackoff bool
 	ticker := time.NewTicker(time.Duration(p.pollInterval) * time.Second)
 	defer ticker.Stop()
 
@@ -106,13 +110,21 @@ func (p *Provider) poll(ctx context.Context, events chan<- ingestion.CommitEvent
 			return
 		}
 
-		// Recompute interval after each poll based on rate-limit state.
+		// Recompute interval after each poll based on live rate-limit state.
+		// Runs every loop so recovery is automatic: once the window resets and
+		// X-RateLimit-Remaining is healthy again, normal cadence resumes.
 		interval := time.Duration(p.pollInterval) * time.Second
 		remaining := atomic.LoadInt64(&p.Metrics.RateLimitRemaining)
-		if remaining >= 0 && remaining < int64(p.pollInterval*rateLimitSafetyPct/100) {
-			// Budget critically low: back off to 5 minutes.
-			interval = 5 * time.Minute
-			fmt.Printf("séance: rate-limit budget low (%d remaining) — backing off to 5m poll\n", remaining)
+		lowBudget := remaining >= 0 && remaining < int64(p.pollInterval*rateLimitSafetyPct/100)
+		if lowBudget {
+			if !inBackoff {
+				fmt.Fprintf(os.Stderr, "séance: rate-limit budget low (%d remaining) — backing off to %s poll\n", remaining, p.LowBudgetInterval)
+				inBackoff = true
+			}
+			interval = p.LowBudgetInterval
+		} else if inBackoff {
+			fmt.Fprintf(os.Stderr, "séance: rate-limit budget recovered (%d remaining) — resuming normal cadence\n", remaining)
+			inBackoff = false
 		}
 		ticker.Reset(interval)
 
