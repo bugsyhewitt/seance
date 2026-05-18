@@ -1,0 +1,159 @@
+title       = "séance default ruleset"
+description = "Default detection rules. Compatible with gitleaks TOML rule format (MIT). Do NOT add TruffleHog detectors (AGPL-3.0 — would contaminate séance's MIT license)."
+
+# ── AWS ────────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "aws-access-key-id"
+description = "AWS Access Key ID"
+regex       = '''(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}'''
+keywords    = ["AKIA", "AGPA", "AIDA", "AROA", "AIPA", "ANPA", "ANVA", "ASIA"]
+tags        = ["cloud", "aws"]
+
+  [rules.allowlist]
+  stopwords = [
+    "AKIAIOSFODNN7EXAMPLE",
+    "AKIAI44QH8DHBEXAMPLE",
+    "AKIAXXXXXXXXXXXXXXXX",
+  ]
+
+[[rules]]
+id          = "aws-secret-access-key"
+description = "AWS Secret Access Key (high-entropy 40-char base64)"
+regex       = '''(?i)(?:aws.{0,20})?(?:secret.{0,20})?['\"]([A-Za-z0-9/+=]{40})['\"]'''
+keywords    = ["aws_secret", "AWS_SECRET", "secret_access_key", "SecretAccessKey"]
+tags        = ["cloud", "aws"]
+entropy     = 4.0
+
+# ── GitHub ─────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "github-pat-classic"
+description = "GitHub Personal Access Token (classic)"
+regex       = '''ghp_[0-9a-zA-Z]{36}'''
+keywords    = ["ghp_"]
+tags        = ["vcs", "github"]
+
+[[rules]]
+id          = "github-oauth-token"
+description = "GitHub OAuth Access Token"
+regex       = '''gho_[0-9a-zA-Z]{36}'''
+keywords    = ["gho_"]
+tags        = ["vcs", "github"]
+
+[[rules]]
+id          = "github-app-token"
+description = "GitHub App Installation / User Token"
+regex       = '''(?:ghu|ghs)_[0-9a-zA-Z]{36}'''
+keywords    = ["ghu_", "ghs_"]
+tags        = ["vcs", "github"]
+
+[[rules]]
+id          = "github-fine-grained-pat"
+description = "GitHub Fine-Grained Personal Access Token"
+regex       = '''github_pat_[0-9a-zA-Z_]{82}'''
+keywords    = ["github_pat_"]
+tags        = ["vcs", "github"]
+
+# ── Stripe ─────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "stripe-secret-key"
+description = "Stripe Secret Key"
+regex       = '''sk_(?:live|test)_[0-9a-zA-Z]{24,}'''
+keywords    = ["sk_live_", "sk_test_"]
+tags        = ["payments", "stripe"]
+
+[[rules]]
+id          = "stripe-restricted-key"
+description = "Stripe Restricted Key"
+regex       = '''rk_(?:live|test)_[0-9a-zA-Z]{24,}'''
+keywords    = ["rk_live_", "rk_test_"]
+tags        = ["payments", "stripe"]
+
+# ── Slack ──────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "slack-bot-token"
+description = "Slack Bot Token"
+regex       = '''xoxb-[0-9]{10,13}-[0-9]{10,13}-[0-9a-zA-Z]{24}'''
+keywords    = ["xoxb-"]
+tags        = ["messaging", "slack"]
+
+[[rules]]
+id          = "slack-user-token"
+description = "Slack User OAuth Token"
+regex       = '''xoxp-[0-9]{10,13}-[0-9]{10,13}-[0-9]{10,13}-[0-9a-zA-Z]{32}'''
+keywords    = ["xoxp-"]
+tags        = ["messaging", "slack"]
+
+[[rules]]
+id          = "slack-webhook"
+description = "Slack Incoming Webhook URL"
+regex       = '''https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+'''
+keywords    = ["hooks.slack.com"]
+tags        = ["messaging", "slack"]
+
+# ── Google ─────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "google-api-key"
+description = "Google API Key"
+regex       = '''AIza[0-9A-Za-z\-_]{35}'''
+keywords    = ["AIza"]
+tags        = ["cloud", "google"]
+
+# ── SendGrid ───────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "sendgrid-api-key"
+description = "SendGrid API Key"
+regex       = '''SG\.[a-zA-Z0-9_\-]{22}\.[a-zA-Z0-9_\-]{43}'''
+keywords    = ["SG."]
+tags        = ["email", "sendgrid"]
+
+# ── Twilio ─────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "twilio-account-sid"
+description = "Twilio Account SID"
+regex       = '''AC[0-9a-fA-F]{32}'''
+keywords    = ["AC"]
+tags        = ["sms", "twilio"]
+
+[[rules]]
+id          = "twilio-auth-token"
+description = "Twilio Auth Token (high entropy hex)"
+regex       = '''(?i)twilio.{0,20}['"]\s*([0-9a-f]{32})\s*['"]'''
+keywords    = ["twilio"]
+tags        = ["sms", "twilio"]
+entropy     = 3.5
+
+# ── Crypto / Private Keys ──────────────────────────────────────────────────────
+
+[[rules]]
+id          = "private-key-pem"
+description = "PEM-encoded private key block"
+regex       = '''-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----'''
+keywords    = ["BEGIN RSA PRIVATE KEY", "BEGIN EC PRIVATE KEY", "BEGIN PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY", "BEGIN ENCRYPTED PRIVATE KEY"]
+tags        = ["crypto", "pem"]
+
+[[rules]]
+id          = "pgp-private-key"
+description = "PGP Private Key Block"
+regex       = '''-----BEGIN PGP PRIVATE KEY BLOCK-----'''
+keywords    = ["BEGIN PGP PRIVATE KEY BLOCK"]
+tags        = ["crypto", "pgp"]
+
+# ── Generic high-entropy patterns ──────────────────────────────────────────────
+
+[[rules]]
+id          = "generic-api-key"
+description = "Generic high-entropy API key assignment"
+regex       = '''(?i)(?:api[_\-]?key|apikey|access[_\-]?key|secret[_\-]?key)\s*[=:]\s*['"]?([A-Za-z0-9/+\-_]{32,64})['"]?'''
+keywords    = ["api_key", "apikey", "access_key", "secret_key", "API_KEY", "APIKEY"]
+tags        = ["generic"]
+entropy     = 3.5
+
+  [rules.allowlist]
+  stopwords = ["changeme", "placeholder", "your_api_key", "INSERT_KEY_HERE", "xxxx"]

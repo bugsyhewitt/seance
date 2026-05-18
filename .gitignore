@@ -1,0 +1,29 @@
+# Build output
+/seance
+/dist/
+*.exe
+
+# State and cache
+.seance/
+*.state.json
+
+# Secrets — never commit these
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+credentials.json
+secrets.yaml
+secrets.yml
+
+# Go toolchain
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
