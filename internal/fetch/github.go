@@ -86,3 +86,66 @@ func (f *GitHubFetcher) Fetch(ctx context.Context, event ingestion.CommitEvent, 
 	}
 	return FileContent{Event: event, FileRef: ref, Skipped: true, SkipReason: "file not in commit response"}, nil
 }
+
+// FetchAll retrieves diff patches for all changed files in a commit.
+// One HTTP request returns diffs for all files; callers should apply path-based
+// filtering on the results to stay within rate-limit budget.
+func (f *GitHubFetcher) FetchAll(ctx context.Context, event ingestion.CommitEvent) ([]FileContent, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/commits/%s",
+		f.baseURL, event.RepoOwner, event.RepoName, event.CommitSHA)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "seance/0.1 (+https://github.com/bugsyhewitt/seance)")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if f.token != "" {
+		req.Header.Set("Authorization", "Bearer "+f.token)
+	}
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil // non-200 treated as transient; caller skips this commit
+	}
+
+	var payload struct {
+		Files []struct {
+			Filename string `json:"filename"`
+			Status   string `json:"status"`
+			Patch    string `json:"patch"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, nil
+	}
+
+	results := make([]FileContent, 0, len(payload.Files))
+	for _, file := range payload.Files {
+		ref := ingestion.FileRef{Path: file.Filename, Status: file.Status}
+		switch {
+		case file.Status == "removed":
+			results = append(results, FileContent{Event: event, FileRef: ref, Skipped: true, SkipReason: "removed"})
+		case len(file.Patch) == 0:
+			results = append(results, FileContent{Event: event, FileRef: ref, Skipped: true, SkipReason: "empty patch"})
+		case len(file.Patch) > maxPatchBytes:
+			results = append(results, FileContent{Event: event, FileRef: ref, Skipped: true, SkipReason: "patch too large"})
+		default:
+			results = append(results, FileContent{
+				Event:   event,
+				FileRef: ref,
+				Patch:   file.Patch,
+				Lines:   strings.Split(file.Patch, "\n"),
+			})
+		}
+	}
+	return results, nil
+}

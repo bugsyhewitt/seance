@@ -1,0 +1,22 @@
+[
+  {
+    "id": "99887766554",
+    "type": "PushEvent",
+    "actor": {"login": "carol"},
+    "repo": {"name": "carol/api-service", "url": "https://api.github.com/repos/carol/api-service"},
+    "payload": {
+      "push_id": 34386608981,
+      "ref": "refs/heads/main",
+      "head": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "before": "cafecafecafecafecafecafecafecafecafecafe",
+      "repository_id": 1068422738
+    },
+    "created_at": "2026-05-19T10:00:00Z"
+  },
+  {
+    "id": "99887766555",
+    "type": "WatchEvent",
+    "actor": {"login": "dave"},
+    "repo": {"name": "dave/repo"}
+  }
+]

@@ -1,7 +1,15 @@
 # Build output
 /seance
+/bin/
 /dist/
 *.exe
+
+# Validation run artifacts (logs, PIDs, state — never commit)
+/validation-v0.1/
+/validation-*/
+
+# PAI session work memory (local only)
+/MEMORY/WORK/
 
 # State and cache
 .seance/

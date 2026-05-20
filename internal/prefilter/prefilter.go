@@ -41,16 +41,28 @@ var suspiciousSegments = []string{
 }
 
 // Filter applies payload-only heuristics to a CommitEvent and returns a Decision.
+//
+// When event.FilesKnown is false (GitHub's new API format no longer includes
+// file paths in the event payload), only non-file heuristics are applied and
+// the commit is passed through for the fetcher to discover its changed files.
 func Filter(event ingestion.CommitEvent) Decision {
+	// Always apply bot check — actor name is available regardless of format.
+	if strings.HasSuffix(event.AuthorName, "[bot]") ||
+		strings.HasSuffix(event.AuthorEmail, "[bot]") {
+		return Decision{Keep: false, Reason: "bot commit"}
+	}
+
+	if !event.FilesKnown {
+		// File paths are unknown; pass through so the fetcher can discover them.
+		// Post-fetch filtering is applied by the pipeline using IsInteresting.
+		return Decision{Keep: true, Files: nil}
+	}
+
 	if len(event.Files) == 0 {
 		return Decision{Keep: false, Reason: "no files"}
 	}
 	if len(event.Files) > maxFilesThreshold {
 		return Decision{Keep: false, Reason: "too many files (likely generated)"}
-	}
-	if strings.HasSuffix(event.AuthorName, "[bot]") ||
-		strings.HasSuffix(event.AuthorEmail, "[bot]") {
-		return Decision{Keep: false, Reason: "bot commit"}
 	}
 
 	var interesting []ingestion.FileRef
@@ -58,7 +70,7 @@ func Filter(event ingestion.CommitEvent) Decision {
 		if f.Status == "removed" {
 			continue
 		}
-		if isInteresting(f.Path) {
+		if IsInteresting(f.Path) {
 			interesting = append(interesting, f)
 		}
 	}
@@ -69,7 +81,10 @@ func Filter(event ingestion.CommitEvent) Decision {
 	return Decision{Keep: true, Files: interesting}
 }
 
-func isInteresting(path string) bool {
+// IsInteresting reports whether a file path is worth scanning for secrets.
+// Exported so the pipeline can apply post-fetch filtering when file paths
+// are not known from the event payload.
+func IsInteresting(path string) bool {
 	lower := strings.ToLower(path)
 	ext := strings.ToLower(filepath.Ext(path))
 	if suspiciousExtensions[ext] {

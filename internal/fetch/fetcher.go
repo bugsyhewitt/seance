@@ -25,4 +25,9 @@ type Fetcher interface {
 	// Fetch retrieves the diff patch for a single file in a commit.
 	// Returns a FileContent with Skipped=true if the file should not be scanned.
 	Fetch(ctx context.Context, event ingestion.CommitEvent, ref ingestion.FileRef) (FileContent, error)
+
+	// FetchAll retrieves diff patches for all changed files in a commit.
+	// Used when file paths are not known from the event payload (FilesKnown=false).
+	// Files with empty or oversized patches are returned with Skipped=true.
+	FetchAll(ctx context.Context, event ingestion.CommitEvent) ([]FileContent, error)
 }

@@ -48,6 +48,48 @@ func TestProvider_ParsesPushEvents(t *testing.T) {
 	}
 }
 
+// TestProvider_ParsesPushEvents_NewFormat verifies that the provider emits a
+// CommitEvent when the payload uses the new GitHub API format (head/before/ref
+// only, no commits array).
+func TestProvider_ParsesPushEvents_NewFormat(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/events_newformat.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Poll-Interval", "60")
+		w.Header().Set("ETag", `"etagnew"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	p := ghprovider.NewWithBaseURL("", srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events, errs := p.Stream(ctx)
+	var got []struct{ sha string; filesKnown bool }
+	for e := range events {
+		got = append(got, struct{ sha string; filesKnown bool }{e.CommitSHA, e.FilesKnown})
+	}
+	if err := <-errs; err != nil && err.Error() != "context deadline exceeded" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 commit event, got %d", len(got))
+	}
+	if got[0].sha != "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" {
+		t.Errorf("unexpected SHA: %s", got[0].sha)
+	}
+	if got[0].filesKnown {
+		t.Error("new-format event must have FilesKnown=false")
+	}
+}
+
 // TestProvider_AdaptiveCadence_BackoffAndRecovery verifies that:
 // (a) when X-RateLimit-Remaining is critically low, the provider backs off, and
 // (b) when it recovers on the next poll, normal cadence resumes (one-way backoff

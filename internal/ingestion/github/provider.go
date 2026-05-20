@@ -206,11 +206,16 @@ func (p *Provider) fetch(ctx context.Context, etag *string, events chan<- ingest
 }
 
 func (p *Provider) parsePushEvent(actor, repoFull string, ts time.Time, payload json.RawMessage, events chan<- ingestion.CommitEvent) {
+	// Parse both the legacy format (commits array with file lists) and the
+	// current GitHub API format (head/before/ref only, no commits array).
 	var push struct {
+		Head    string `json:"head"`
+		Before  string `json:"before"`
+		Ref     string `json:"ref"`
 		Commits []struct {
-			SHA    string `json:"sha"`
+			SHA     string `json:"sha"`
 			Message string `json:"message"`
-			Author struct {
+			Author  struct {
 				Name  string `json:"name"`
 				Email string `json:"email"`
 			} `json:"author"`
@@ -225,28 +230,47 @@ func (p *Provider) parsePushEvent(actor, repoFull string, ts time.Time, payload 
 
 	owner, name := splitRepo(repoFull)
 
-	for _, c := range push.Commits {
-		var files []ingestion.FileRef
-		for _, f := range c.Added {
-			files = append(files, ingestion.FileRef{Path: f, Status: "added"})
+	if len(push.Commits) > 0 {
+		// Legacy format: commits and file paths present in the event payload.
+		for _, c := range push.Commits {
+			var files []ingestion.FileRef
+			for _, f := range c.Added {
+				files = append(files, ingestion.FileRef{Path: f, Status: "added"})
+			}
+			for _, f := range c.Modified {
+				files = append(files, ingestion.FileRef{Path: f, Status: "modified"})
+			}
+			for _, f := range c.Removed {
+				files = append(files, ingestion.FileRef{Path: f, Status: "removed"})
+			}
+			events <- ingestion.CommitEvent{
+				Provider:    "github",
+				RepoOwner:   owner,
+				RepoName:    name,
+				CommitSHA:   c.SHA,
+				CommitMsg:   c.Message,
+				AuthorName:  c.Author.Name,
+				AuthorEmail: c.Author.Email,
+				Files:       files,
+				FilesKnown:  true,
+				Timestamp:   ts,
+			}
+			atomic.AddUint64(&p.Metrics.CommitsEmitted, 1)
 		}
-		for _, f := range c.Modified {
-			files = append(files, ingestion.FileRef{Path: f, Status: "modified"})
-		}
-		for _, f := range c.Removed {
-			files = append(files, ingestion.FileRef{Path: f, Status: "removed"})
-		}
+		return
+	}
 
+	// New API format (GitHub removed commits from payload): use the head SHA.
+	// File paths are not known — the fetcher will discover them.
+	if push.Head != "" {
 		events <- ingestion.CommitEvent{
-			Provider:    "github",
-			RepoOwner:   owner,
-			RepoName:    name,
-			CommitSHA:   c.SHA,
-			CommitMsg:   c.Message,
-			AuthorName:  c.Author.Name,
-			AuthorEmail: c.Author.Email,
-			Files:       files,
-			Timestamp:   ts,
+			Provider:   "github",
+			RepoOwner:  owner,
+			RepoName:   name,
+			CommitSHA:  push.Head,
+			AuthorName: actor, // only the actor (pusher login) is available
+			FilesKnown: false,
+			Timestamp:  ts,
 		}
 		atomic.AddUint64(&p.Metrics.CommitsEmitted, 1)
 	}

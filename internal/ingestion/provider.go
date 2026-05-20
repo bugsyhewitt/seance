@@ -9,8 +9,9 @@ import (
 )
 
 // CommitEvent represents a single commit observed from a provider.
-// All fields are populated from the event payload; no extra API requests
-// are needed to construct a CommitEvent.
+// When FilesKnown is true, Files contains the set of changed paths extracted
+// from the event payload. When false, the payload did not include file paths
+// (e.g. GitHub's new events API format) and the fetcher must discover them.
 type CommitEvent struct {
 	Provider    string
 	RepoOwner   string
@@ -20,6 +21,7 @@ type CommitEvent struct {
 	AuthorName  string
 	AuthorEmail string
 	Files       []FileRef
+	FilesKnown  bool // true when Files was populated from the event payload
 	Timestamp   time.Time
 }
 

@@ -52,10 +52,16 @@ would poll specific repositories instead.
 A GitLab provider is possible for organisation-scoped scanning only.
 Feasibility for v0.3 must be validated before the interface is committed.
 
-**State interaction**: the GitHub provider reads/writes ETag and PollCursor
-from the State store between polls. On cold start, behaviour is configurable:
-- `resume` (default): continue from last cursor, skip seen commits
-- `fresh`: discard state, start from the current event horizon
+**State interaction**: on startup the provider initialises with an empty ETag,
+so the first poll always returns a full event list (HTTP 200). After the first
+successful poll the ETag is cached in memory and subsequent polls within the
+same process use conditional requests (HTTP 304 when nothing changed).
+ETag persistence across restarts is a v0.2 optimisation — on restart, one
+extra full poll occurs, after which conditional requests resume.
+
+`SeenCommits` **are** persisted to disk. On restart the deduplication map is
+reloaded and commits already processed in the previous run are skipped, so
+no duplicate findings are emitted regardless of ETag state.
 
 ---
 
@@ -152,15 +158,32 @@ type Sink interface {
 
 séance is not stateless. Three pieces of state must survive restarts:
 
-| Field | Purpose | Without it |
+| Field | Purpose | Persisted? |
 |-------|---------|-----------|
-| `ETag` | Conditional GET for events endpoint | Every poll re-processes the same events |
-| `PollCursor` | Last-seen event ID | Missed events on restart |
-| `SeenCommits` | Deduplication map | Duplicate findings on restart |
+| `ETag` | Conditional GET — avoids re-fetching unchanged event pages | In-memory only (v0.1); resets on restart, one extra full poll occurs |
+| `PollCursor` | Last-seen event ID | Persisted (not yet wired to GitHub provider in v0.1) |
+| `SeenCommits` | Deduplication map — prevents duplicate findings | Persisted; loaded on startup, so restarts produce no duplicates |
 
 State is persisted as JSON in `{state-dir}/state.json`, written atomically
 (temp file + rename). Entries in `SeenCommits` older than `seen_ttl` (default
 7 days) are evicted to bound file size.
+
+### Restart Resume Behaviour (v0.1)
+
+On clean shutdown (SIGINT / SIGTERM), séance:
+1. Stops ingestion (context cancelled).
+2. Saves state to disk via atomic write (temp file + rename).
+3. Emits a final cumulative metrics line to stderr.
+4. Exits 0.
+
+On restart:
+- `SeenCommits` is reloaded — commits already processed are skipped and
+  produce no duplicate findings.
+- ETag is empty — the first poll is a full fetch (HTTP 200). This consumes
+  one extra rate-limit slot but does not cause duplicate findings.
+- Subsequent polls within the new process use conditional requests as normal.
+
+Verified by `TestRestartDeduplication` in `internal/state/state_test.go`.
 
 ---
 

@@ -37,6 +37,11 @@ func init() {
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
+	// --token takes precedence; GITHUB_TOKEN env var is the Docker-friendly fallback.
+	if cfg.GitHubToken == "" {
+		cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

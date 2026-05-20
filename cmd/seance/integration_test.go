@@ -23,7 +23,8 @@ func TestEndToEnd_FindsSecretInFakeEvent(t *testing.T) {
 	event := ingestion.CommitEvent{
 		Provider: "fake", RepoOwner: "alice", RepoName: "repo",
 		CommitSHA: "deadbeef", AuthorName: "alice",
-		Files: []ingestion.FileRef{{Path: ".env", Status: "added"}},
+		Files:      []ingestion.FileRef{{Path: ".env", Status: "added"}},
+		FilesKnown: true,
 	}
 
 	provider := fake.New(event)
