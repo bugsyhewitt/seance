@@ -3,7 +3,7 @@
 > *Listening to what the dead repos whisper.*
 
 séance watches the GitHub public commit stream and surfaces leaked credentials —
-API keys, tokens, private keys, `.env` files — as fast as the source API allows.
+API keys, tokens, private keys, `.env` files — as fast as the source API allows
 
 It is a modern revival of the abandoned [shhgit](https://github.com/eth0izzle/shhgit),
 rewritten in Go with an honest ingestion model, a pluggable gitleaks-compatible
