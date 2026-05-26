@@ -1,6 +1,51 @@
 # Changelog
 
 All notable changes to séance are documented here.
+
+## [Unreleased] — v0.2 in progress
+
+### Added
+
+**Shannon entropy analysis** (scan engine)
+- `shannonEntropy(s string) float64` — bits-per-character Shannon entropy
+  calculation used to distinguish random credential material from repetitive
+  or human-readable strings
+- Entropy gate in scan engine: when `rule.Entropy > 0`, matches whose secret
+  value falls below the threshold are dropped before a Finding is emitted.
+  Eliminates placeholder strings, repeated characters, and dictionary words
+  that satisfy a regex shape but are not real credentials.
+- `entropyConfidenceBonus` — linear bonus of 0–0.15 based on how far measured
+  entropy exceeds the rule threshold (saturates at 1.0 bit of headroom)
+
+**Dynamic confidence scoring** (replacing hardcoded 0.85)
+- Base confidence: 0.80 for any match surviving keyword + regex + allowlist
+- High-specificity bonus (+0.10): applied when rule keywords are 4–8 chars
+  (tight prefix patterns like `AKIA`, `ghp_`, `xoxb-`)
+- Entropy headroom bonus (+0–0.15): as above
+- Path penalty (−0.10): generic-tagged rules on non-suspicious file paths
+- Score clamped to [0.0, 1.0]
+
+**SecretGroup extraction** (scan engine)
+- Engine now honours `rule.SecretGroup` to extract the correct capture group
+  as the secret value for redaction and entropy analysis. Previously the full
+  match was always used; this meant rules with context-prefix captures (e.g.
+  `aws_secret_access_key = "..."`) were redacting and analysing the full
+  `key = value` string rather than just the value.
+
+**Entropy thresholds added to default signatures**
+- `github-pat-classic`, `github-oauth-token`, `github-app-token` → 3.5
+- `stripe-secret-key`, `stripe-restricted-key` → 3.5
+- `google-api-key` → 3.5
+- Existing: `aws-secret-access-key` (4.0), `twilio-auth-token` (3.5),
+  `generic-api-key` (3.5) unchanged
+
+**Tests**
+- `internal/scan/entropy_test.go`: 10 unit tests covering edge cases and
+  boundary conditions for `shannonEntropy` and `entropyConfidenceBonus`
+- `internal/scan/engine_test.go`: extended with 7 new tests covering entropy
+  filtering (drop low, keep high, disabled), SecretGroup extraction, and
+  confidence score range invariants
+
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 séance uses [Semantic Versioning](https://semver.org/).
 
@@ -82,5 +127,5 @@ Full validation notes: `docs/VALIDATION-v0.1.md`
   is the safety net.
 - ETag is not persisted across restarts. The first poll after restart is a full
   fetch; subsequent polls resume conditional requests. No duplicate findings result.
-- Entropy scoring is not yet implemented (planned for v0.2).
+- Entropy scoring not implemented in v0.1 (shipped in v0.2 development, see Unreleased section above).
 - Single provider (GitHub public events). GitLab and GH Archive planned.
