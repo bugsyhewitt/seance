@@ -22,10 +22,10 @@ surface real leaked credentials from the GitHub public event stream.
 
 ## v0.2 — Quality: entropy + live feed + false-positive hardening
 
-- [ ] Shannon entropy analysis integrated into scan engine
+- [x] Shannon entropy analysis integrated into scan engine
+- [x] Per-finding confidence scoring improvements (entropy headroom, path weight)
 - [ ] Live CLI display: colored terminal feed with rate-limit and finding counters
 - [ ] False-positive tuning: test-key patterns, known-dummy values, path allowlists
-- [ ] Per-finding confidence scoring improvements (entropy headroom, path weight)
 - [ ] File output sink (rolling, configurable rotation)
 - [ ] Seen-commit eviction tuning and state size bounds
 - [ ] Integration test with recorded GitHub API fixtures

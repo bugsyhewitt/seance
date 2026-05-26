@@ -33,6 +33,7 @@ description = "GitHub Personal Access Token (classic)"
 regex       = '''ghp_[0-9a-zA-Z]{36}'''
 keywords    = ["ghp_"]
 tags        = ["vcs", "github"]
+entropy     = 3.5
 
 [[rules]]
 id          = "github-oauth-token"
@@ -40,6 +41,7 @@ description = "GitHub OAuth Access Token"
 regex       = '''gho_[0-9a-zA-Z]{36}'''
 keywords    = ["gho_"]
 tags        = ["vcs", "github"]
+entropy     = 3.5
 
 [[rules]]
 id          = "github-app-token"
@@ -47,6 +49,7 @@ description = "GitHub App Installation / User Token"
 regex       = '''(?:ghu|ghs)_[0-9a-zA-Z]{36}'''
 keywords    = ["ghu_", "ghs_"]
 tags        = ["vcs", "github"]
+entropy     = 3.5
 
 [[rules]]
 id          = "github-fine-grained-pat"
@@ -63,6 +66,7 @@ description = "Stripe Secret Key"
 regex       = '''sk_(?:live|test)_[0-9a-zA-Z]{24,}'''
 keywords    = ["sk_live_", "sk_test_"]
 tags        = ["payments", "stripe"]
+entropy     = 3.5
 
 [[rules]]
 id          = "stripe-restricted-key"
@@ -70,6 +74,7 @@ description = "Stripe Restricted Key"
 regex       = '''rk_(?:live|test)_[0-9a-zA-Z]{24,}'''
 keywords    = ["rk_live_", "rk_test_"]
 tags        = ["payments", "stripe"]
+entropy     = 3.5
 
 # ── Slack ──────────────────────────────────────────────────────────────────────
 
@@ -102,6 +107,7 @@ description = "Google API Key"
 regex       = '''AIza[0-9A-Za-z\-_]{35}'''
 keywords    = ["AIza"]
 tags        = ["cloud", "google"]
+entropy     = 3.5
 
 # ── SendGrid ───────────────────────────────────────────────────────────────────
 
