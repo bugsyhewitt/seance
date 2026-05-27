@@ -151,8 +151,11 @@ Community contributions to `signatures/` are welcome. Please include:
 
 séance persists a small state file under `.seance/` (configurable with
 `--state-dir`). This stores:
-- **Seen-commit set**: SHA map for deduplication, 7-day rolling window.
-  Reloaded on restart — no duplicate findings across restarts.
+- **Seen-commit set**: SHA map for deduplication, 7-day rolling TTL
+  (`seen_ttl_days`, default 7). A background sweep evicts entries older than
+  the window every 5 minutes — and once more on shutdown — so the set and the
+  on-disk state file stay bounded for the life of the process. Reloaded on
+  restart — no duplicate findings across restarts.
 - **ETag**: cached in memory within a run for conditional polling (HTTP 304).
   Resets on restart; the first poll after restart is a full fetch, then
   conditional requests resume. One extra API call, no correctness impact.
@@ -221,9 +224,14 @@ Live metrics are written to stderr every 60 s in `key=value` format:
 ```
 séance metrics ts=1234567890 push_events_total=454 prefilter_passed_total=405 \
   prefilter_dropped_total=49 fetches_total=405 polls_total=17 findings_total=0 \
-  push_events_hr=1602.3 prefilter_survival_pct=89.2 fetches_hr=1429.3 \
-  polls_hr=60.0 rate_limit_remaining=4592 rate_limit_reset_in=1981
+  seen_commits_tracked=412 push_events_hr=1602.3 prefilter_survival_pct=89.2 \
+  fetches_hr=1429.3 polls_hr=60.0 rate_limit_remaining=4592 rate_limit_reset_in=1981
 ```
+
+`seen_commits_tracked` is the current size of the seen-commit dedup set. It
+stays bounded by the 7-day TTL (see [State](#state)): a background sweep evicts
+entries older than the window every 5 minutes, and a final sweep runs on
+shutdown before the state file is persisted.
 
 Multiple tokens on one GitHub account do **not** raise the ceiling — the
 5,000/hr limit is per account, not per token.

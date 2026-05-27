@@ -87,3 +87,63 @@ func TestState_Evict(t *testing.T) {
 		t.Error("new commit should not have been evicted")
 	}
 }
+
+// TestState_Evict_SevenDayTTL exercises the exact TTL the pipeline threads
+// through from config.SeenTTLDays (default 7), asserting that entries older
+// than the window are gone while recent ones survive, and that the tracked
+// count is bounded after eviction.
+func TestState_Evict_SevenDayTTL(t *testing.T) {
+	const ttl = 7 * 24 * time.Hour
+	s := state.New()
+
+	// Three entries clearly past the 7-day window.
+	s.SeenCommits["stale-1"] = time.Now().Add(-8 * 24 * time.Hour)
+	s.SeenCommits["stale-2"] = time.Now().Add(-10 * 24 * time.Hour)
+	s.SeenCommits["stale-3"] = time.Now().Add(-30 * 24 * time.Hour)
+	// Two entries comfortably inside the window.
+	s.SeenCommits["fresh-1"] = time.Now().Add(-1 * time.Hour)
+	s.SeenCommits["fresh-2"] = time.Now().Add(-6 * 24 * time.Hour)
+
+	s.Evict(ttl)
+
+	for _, sha := range []string{"stale-1", "stale-2", "stale-3"} {
+		if s.Seen(sha) {
+			t.Errorf("entry %q older than TTL should have been evicted", sha)
+		}
+	}
+	for _, sha := range []string{"fresh-1", "fresh-2"} {
+		if !s.Seen(sha) {
+			t.Errorf("entry %q within TTL should have survived eviction", sha)
+		}
+	}
+	if got := len(s.SeenCommits); got != 2 {
+		t.Errorf("seen_commits_tracked after eviction: got %d, want 2", got)
+	}
+}
+
+// TestState_Evict_Persisted proves the bound holds across a save/load cycle:
+// after eviction and persistence, stale entries do not return on reload.
+func TestState_Evict_Persisted(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewJSONFileStorage(filepath.Join(dir, "state.json"))
+
+	s := state.New()
+	s.SeenCommits["stale"] = time.Now().Add(-9 * 24 * time.Hour)
+	s.SeenCommits["fresh"] = time.Now()
+
+	s.Evict(7 * 24 * time.Hour)
+	if err := store.Save(s); err != nil {
+		t.Fatalf("save after evict: %v", err)
+	}
+
+	reloaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load after evict: %v", err)
+	}
+	if reloaded.Seen("stale") {
+		t.Error("evicted entry must not reappear after reload")
+	}
+	if !reloaded.Seen("fresh") {
+		t.Error("surviving entry must persist across reload")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,8 +31,21 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
+	// seenTTL bounds the SeenCommits map so state size does not grow unbounded
+	// for the life of the process. Defaults to 7 days via config.SeenTTLDays.
+	seenTTL := time.Duration(c.SeenTTLDays) * 24 * time.Hour
+
+	// stMu guards all access to st.SeenCommits, which is mutated by the main
+	// loop and read/trimmed by the metrics and eviction goroutines.
+	var stMu sync.Mutex
+
 	defer func() {
+		// Evict stale seen-commit entries before the final persist so the
+		// on-disk state file stays bounded across restarts.
+		stMu.Lock()
+		st.Evict(seenTTL)
 		st.LastUpdated = time.Now()
+		stMu.Unlock()
 		_ = store.Save(st)
 	}()
 
@@ -77,8 +91,12 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			resetIn = rlReset - time.Now().Unix()
 		}
 
+		stMu.Lock()
+		seenTracked := len(st.SeenCommits)
+		stMu.Unlock()
+
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d seen_commits_tracked=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			out,
@@ -86,6 +104,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			fetched,
 			provFetch,
 			findings,
+			seenTracked,
 			float64(provPush)/elapsed,
 			survivalPct,
 			float64(fetched)/elapsed,
@@ -93,6 +112,13 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			rlRemaining,
 			resetIn,
 		)
+	}
+
+	// evict trims stale seen-commit entries under the state mutex.
+	evict := func() {
+		stMu.Lock()
+		st.Evict(seenTTL)
+		stMu.Unlock()
 	}
 
 	// Periodic metrics reporter — fires every 60s.
@@ -109,6 +135,21 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 	}()
 
+	// Periodic seen-commit eviction — fires every 5 minutes so the SeenCommits
+	// map (and the persisted state file) stays bounded by the TTL.
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				evict()
+			}
+		}
+	}()
+
 	events, errs := provider.Stream(ctx)
 	for {
 		select {
@@ -117,10 +158,15 @@ func runPipeline(ctx context.Context, c config.Config) error {
 				logMetrics()
 				return nil
 			}
-			if st.Seen(event.CommitSHA) {
+			stMu.Lock()
+			seen := st.Seen(event.CommitSHA)
+			if !seen {
+				st.Mark(event.CommitSHA)
+			}
+			stMu.Unlock()
+			if seen {
 				continue
 			}
-			st.Mark(event.CommitSHA)
 			atomic.AddUint64(&preFilterIn, 1)
 
 			decision := prefilter.Filter(event)
