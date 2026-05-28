@@ -40,21 +40,26 @@ const (
 
 // Metrics holds live instrumentation counters. All fields are updated atomically.
 type Metrics struct {
-	PushEventsReceived uint64 // total PushEvents parsed from API responses
-	CommitsEmitted     uint64 // total CommitEvents sent downstream
-	FetchRequests      uint64 // total HTTP GET /events requests issued
-	RateLimitRemaining int64  // last observed X-RateLimit-Remaining (-1 = unknown)
-	RateLimitReset     int64  // last observed X-RateLimit-Reset (Unix timestamp)
+	PushEventsReceived  uint64 // total PushEvents parsed from API responses
+	CommitsEmitted      uint64 // total CommitEvents sent downstream
+	ForcePushesReceived uint64 // total force-push events detected and emitted
+	FetchRequests       uint64 // total HTTP GET /events requests issued
+	RateLimitRemaining  int64  // last observed X-RateLimit-Remaining (-1 = unknown)
+	RateLimitReset      int64  // last observed X-RateLimit-Reset (Unix timestamp)
 }
 
 // Provider polls the GitHub public events API and emits PushEvent commits.
 type Provider struct {
 	token             string
 	baseURL           string
-	pollInterval      int // seconds; updated from X-Poll-Interval header
+	pollInterval      int           // seconds; updated from X-Poll-Interval header
 	LowBudgetInterval time.Duration // how long to back off when rate limit is low; default 5m
-	client            *http.Client
-	Metrics           Metrics
+	// DetectForcePush controls whether force-push (history-rewrite) events are
+	// emitted as ForcePush-flagged CommitEvents. Default true. Gated by the
+	// --force-push CLI flag so operators can disable the extra compare-API cost.
+	DetectForcePush bool
+	client          *http.Client
+	Metrics         Metrics
 }
 
 // New returns a GitHub provider. token may be empty for unauthenticated
@@ -73,6 +78,7 @@ func NewWithBaseURL(token, baseURL string) *Provider {
 		baseURL:           baseURL,
 		pollInterval:      defaultPollInterval,
 		LowBudgetInterval: 5 * time.Minute,
+		DetectForcePush:   true,
 		client:            &http.Client{Timeout: 30 * time.Second},
 	}
 	p.Metrics.RateLimitRemaining = -1
@@ -184,12 +190,12 @@ func (p *Provider) fetch(ctx context.Context, etag *string, events chan<- ingest
 	}
 
 	var rawEvents []struct {
-		ID      string          `json:"id"`
-		Type    string          `json:"type"`
-		Actor   struct{ Login string } `json:"actor"`
-		Repo    struct{ Name string }  `json:"repo"`
-		Payload json.RawMessage        `json:"payload"`
-		CreatedAt time.Time            `json:"created_at"`
+		ID        string                 `json:"id"`
+		Type      string                 `json:"type"`
+		Actor     struct{ Login string } `json:"actor"`
+		Repo      struct{ Name string }  `json:"repo"`
+		Payload   json.RawMessage        `json:"payload"`
+		CreatedAt time.Time              `json:"created_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rawEvents); err != nil {
 		return fmt.Errorf("github events: decode: %w", err)
@@ -209,10 +215,13 @@ func (p *Provider) parsePushEvent(actor, repoFull string, ts time.Time, payload 
 	// Parse both the legacy format (commits array with file lists) and the
 	// current GitHub API format (head/before/ref only, no commits array).
 	var push struct {
-		Head    string `json:"head"`
-		Before  string `json:"before"`
-		Ref     string `json:"ref"`
-		Commits []struct {
+		Head         string `json:"head"`
+		Before       string `json:"before"`
+		Ref          string `json:"ref"`
+		Forced       bool   `json:"forced"`
+		Size         int    `json:"size"`
+		DistinctSize int    `json:"distinct_size"`
+		Commits      []struct {
 			SHA     string `json:"sha"`
 			Message string `json:"message"`
 			Author  struct {
@@ -260,6 +269,29 @@ func (p *Provider) parsePushEvent(actor, repoFull string, ts time.Time, payload 
 		return
 	}
 
+	// Detect a force-push (history rewrite). The before SHA points at the tip
+	// that became dangling — that is where a panic-deleted secret lives. We emit
+	// a ForcePush-flagged event carrying the before SHA so the fetcher can compare
+	// before...head and recover the orphaned diff. Branch creations (before is the
+	// zero SHA) and branch deletions (head is the zero SHA) have no recoverable
+	// prior tip, so they are excluded.
+	if p.DetectForcePush && isForcePush(push.Forced, push.DistinctSize, push.Before, push.Head) {
+		events <- ingestion.CommitEvent{
+			Provider:   "github",
+			RepoOwner:  owner,
+			RepoName:   name,
+			CommitSHA:  push.Head,
+			AuthorName: actor,
+			FilesKnown: false,
+			ForcePush:  true,
+			BeforeSHA:  push.Before,
+			Timestamp:  ts,
+		}
+		atomic.AddUint64(&p.Metrics.CommitsEmitted, 1)
+		atomic.AddUint64(&p.Metrics.ForcePushesReceived, 1)
+		return
+	}
+
 	// New API format (GitHub removed commits from payload): use the head SHA.
 	// File paths are not known — the fetcher will discover them.
 	if push.Head != "" {
@@ -274,6 +306,26 @@ func (p *Provider) parsePushEvent(actor, repoFull string, ts time.Time, payload 
 		}
 		atomic.AddUint64(&p.Metrics.CommitsEmitted, 1)
 	}
+}
+
+// zeroSHA is the all-zero object name GitHub uses for branch creation (as
+// "before") and branch deletion (as "head").
+const zeroSHA = "0000000000000000000000000000000000000000"
+
+// isForcePush reports whether a push payload has the force-push (history-rewrite)
+// shape: HEAD moved off a real prior tip that is now dangling. This is true when
+// the payload's forced flag is set, or when HEAD changed (before != head) with no
+// distinct commits — meaning HEAD was reset backward rather than advanced. Branch
+// creations (before == zero) and deletions (head == zero) are excluded because
+// there is no recoverable orphaned tip.
+func isForcePush(forced bool, distinctSize int, before, head string) bool {
+	if before == "" || head == "" || before == head {
+		return false
+	}
+	if before == zeroSHA || head == zeroSHA {
+		return false
+	}
+	return forced || distinctSize == 0
 }
 
 func (p *Provider) updateRateLimit(resp *http.Response) {

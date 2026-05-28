@@ -1,0 +1,13 @@
+{
+  "status": "diverged",
+  "ahead_by": 0,
+  "behind_by": 1,
+  "total_commits": 1,
+  "files": [
+    {
+      "filename": "config/prod.env",
+      "status": "added",
+      "patch": "@@ -0,0 +1,2 @@\n+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    }
+  ]
+}

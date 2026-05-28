@@ -93,7 +93,26 @@ func (f *GitHubFetcher) Fetch(ctx context.Context, event ingestion.CommitEvent, 
 func (f *GitHubFetcher) FetchAll(ctx context.Context, event ingestion.CommitEvent) ([]FileContent, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/commits/%s",
 		f.baseURL, event.RepoOwner, event.RepoName, event.CommitSHA)
+	return f.fetchFiles(ctx, event, url)
+}
 
+// FetchCompare retrieves the diff orphaned by a force-push. For a history
+// rewrite, HEAD was reset from BeforeSHA (now dangling) back to CommitSHA, so
+// the buried content is everything reachable from the old tip that the new tip
+// no longer contains. The compare endpoint with head...before surfaces exactly
+// those commits' diffs. The dangling before SHA remains retrievable for a window.
+func (f *GitHubFetcher) FetchCompare(ctx context.Context, event ingestion.CommitEvent) ([]FileContent, error) {
+	if event.BeforeSHA == "" || event.CommitSHA == "" {
+		return nil, nil
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/compare/%s...%s",
+		f.baseURL, event.RepoOwner, event.RepoName, event.CommitSHA, event.BeforeSHA)
+	return f.fetchFiles(ctx, event, url)
+}
+
+// fetchFiles performs a single GET that returns a {files:[...]} payload (shared
+// by the commit and compare endpoints) and maps it to []FileContent.
+func (f *GitHubFetcher) fetchFiles(ctx context.Context, event ingestion.CommitEvent, url string) ([]FileContent, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err

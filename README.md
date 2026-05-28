@@ -22,6 +22,7 @@ Part of the graveyard toolkit alongside
 | Does | Doesn't |
 |------|---------|
 | Watch the GitHub public events API for new pushes | Access private repositories |
+| Recover and scan secrets buried by a force-push (history rewrite) | Store or log raw secret values — findings are always redacted |
 | Surface file paths and commits containing leaked credentials | Store or log raw secret values — findings are always redacted |
 | Apply a pluggable, gitleaks-compatible signature ruleset | Verify credentials against their provider APIs |
 | Emit structured NDJSON findings for downstream processing | Scan retroactively (use GH Archive mode in a later release) |
@@ -42,6 +43,40 @@ documented as not a real-time feed. Expect:
 
 The value is catching secrets before they are exploited, not before the
 developer notices the typo. Many leaked credentials persist for days or weeks.
+
+---
+
+## Force-push detection
+
+A force-push (`git push --force`) that rewrites history backward is the single
+highest-signal indicator of an *intentional* secret removal: a developer commits
+a key, notices, and rewrites the branch back to before the mistake. The leaked
+secret then lives only in the commit(s) that became **dangling** between the
+branch's old tip (`before`) and its new tip (`head`) — content that a tool which
+only scans the new HEAD never sees.
+
+séance detects the force-push shape from the push event (HEAD reset backward with
+no new distinct commits, or the payload's `forced` flag) and recovers the
+orphaned diff with a single `GET /repos/{owner}/{repo}/compare/{head}...{before}`
+request. Dangling commits remain retrievable by SHA on GitHub for a window, which
+is exactly long enough for séance to scan what someone tried to bury.
+
+This is on by default and costs one extra compare request per force-push (force
+pushes are rare relative to normal pushes, so the rate-limit impact is small).
+Disable it with `--force-push=false`. The `force_pushes_total` metric reports how
+many force-push events have been recovered.
+
+```bash
+# Default: force-push recovery enabled
+seance
+
+# Disable force-push recovery (saves one compare request per force-push)
+seance --force-push=false
+```
+
+Branch creations (`before` is the all-zero SHA) and branch deletions (`head` is
+the all-zero SHA) are *not* treated as force-pushes — there is no recoverable
+prior tip.
 
 ---
 
@@ -88,6 +123,9 @@ seance --token ghp_your_token_here
 
 # Custom signatures file
 seance --signatures /path/to/rules.toml
+
+# Disable force-push (history-rewrite) recovery
+seance --force-push=false
 
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'
@@ -216,17 +254,24 @@ séance is designed to operate politely within GitHub's API limits:
    suspicious extensions or segments.
 3. Adaptive backoff fires when `X-RateLimit-Remaining` drops below 10%,
    widening the poll interval to 5 minutes until the window resets.
+4. Force-push recovery adds one `GET /compare` request *per force-push only*.
+   Force-pushes are rare relative to normal pushes, so the budget impact is
+   minor; disable with `--force-push=false` if you need the headroom.
 
 Observed in validation (off-peak): ~1,475 requests/hour — roughly 29% of budget.
 
 Live metrics are written to stderr every 60 s in `key=value` format:
 
 ```
-séance metrics ts=1234567890 push_events_total=454 prefilter_passed_total=405 \
-  prefilter_dropped_total=49 fetches_total=405 polls_total=17 findings_total=0 \
-  seen_commits_tracked=412 push_events_hr=1602.3 prefilter_survival_pct=89.2 \
-  fetches_hr=1429.3 polls_hr=60.0 rate_limit_remaining=4592 rate_limit_reset_in=1981
+séance metrics ts=1234567890 push_events_total=454 force_pushes_total=3 \
+  prefilter_passed_total=405 prefilter_dropped_total=49 fetches_total=405 \
+  polls_total=17 findings_total=0 seen_commits_tracked=412 push_events_hr=1602.3 \
+  prefilter_survival_pct=89.2 fetches_hr=1429.3 polls_hr=60.0 \
+  rate_limit_remaining=4592 rate_limit_reset_in=1981
 ```
+
+`force_pushes_total` counts force-push (history-rewrite) events detected and
+recovered via the compare API (see [Force-push detection](#force-push-detection)).
 
 `seen_commits_tracked` is the current size of the seen-commit dedup set. It
 stays bounded by the 7-day TTL (see [State](#state)): a background sweep evicts
