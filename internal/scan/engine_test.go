@@ -3,6 +3,7 @@ package scan_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
@@ -21,6 +22,21 @@ func (c *captureSink) Emit(_ context.Context, f output.Finding) error {
 	return nil
 }
 func (c *captureSink) Close() error { return nil }
+
+// lockedSink is a concurrency-safe sink used by the hot-reload race test, where
+// many goroutines call Scan (and thus Emit) at once.
+type lockedSink struct {
+	findings *[]output.Finding
+	mu       *sync.Mutex
+}
+
+func (l *lockedSink) Emit(_ context.Context, f output.Finding) error {
+	l.mu.Lock()
+	*l.findings = append(*l.findings, f)
+	l.mu.Unlock()
+	return nil
+}
+func (l *lockedSink) Close() error { return nil }
 
 func containsStars(s string) bool {
 	for _, c := range s {
@@ -269,6 +285,120 @@ func TestEngine_Confidence_WithEntropy(t *testing.T) {
 	if findings[0].Confidence > 1.0 {
 		t.Errorf("confidence must not exceed 1.0, got %f", findings[0].Confidence)
 	}
+}
+
+// ── Rule hot-reload (SIGHUP machinery) ──────────────────────────────────────────
+
+// TestEngine_ReloadRules_SwapsActiveSet verifies that ReloadRules replaces the
+// engine's rule set: a value that matched the old rules no longer matches after
+// a reload to a disjoint rule set, and a value matching the new rules now does.
+func TestEngine_ReloadRules_SwapsActiveSet(t *testing.T) {
+	awsRules := []ruleset.Rule{{
+		ID: "aws", Regex: `AKIA[A-Z0-9]{16}`, Keywords: []string{"AKIA"},
+	}}
+	ghRules := []ruleset.Rule{{
+		ID: "ghp", Regex: `ghp_[0-9a-zA-Z]{36}`, Keywords: []string{"ghp_"},
+	}}
+
+	var findings []output.Finding
+	engine := scan.New(awsRules, &captureSink{findings: &findings})
+
+	if engine.RuleCount() != 1 {
+		t.Fatalf("initial rule count: got %d, want 1", engine.RuleCount())
+	}
+
+	awsLine := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	n, _ := engine.Scan(context.Background(), newContent(awsLine, []string{awsLine}))
+	if n != 1 {
+		t.Fatalf("aws rule before reload: got %d findings, want 1", n)
+	}
+
+	// Swap to a disjoint rule set.
+	engine.ReloadRules(ghRules)
+	if engine.RuleCount() != 1 {
+		t.Fatalf("post-reload rule count: got %d, want 1", engine.RuleCount())
+	}
+
+	// The AWS key no longer matches under the GitHub-only rule set.
+	findings = findings[:0]
+	n, _ = engine.Scan(context.Background(), newContent(awsLine, []string{awsLine}))
+	if n != 0 {
+		t.Errorf("aws line after reload to gh-only rules: got %d findings, want 0", n)
+	}
+
+	// A GitHub PAT now matches the freshly loaded rule.
+	ghLine := "token = ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	n, _ = engine.Scan(context.Background(), newContent(ghLine, []string{ghLine}))
+	if n != 1 {
+		t.Errorf("gh line after reload: got %d findings, want 1", n)
+	}
+}
+
+// TestEngine_ReloadRules_Empty verifies that reloading to an empty rule set
+// disables detection (no panic, zero findings).
+func TestEngine_ReloadRules_Empty(t *testing.T) {
+	rules := []ruleset.Rule{{ID: "aws", Regex: `AKIA[A-Z0-9]{16}`, Keywords: []string{"AKIA"}}}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+
+	engine.ReloadRules(nil)
+	if engine.RuleCount() != 0 {
+		t.Fatalf("after empty reload, rule count: got %d, want 0", engine.RuleCount())
+	}
+	line := "+AKIAIOSFODNN7EXAMPLE"
+	n, err := engine.Scan(context.Background(), newContent(line, []string{line}))
+	if err != nil {
+		t.Fatalf("Scan after empty reload: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("empty rule set should produce 0 findings, got %d", n)
+	}
+}
+
+// TestEngine_ReloadRules_ConcurrentWithScan exercises the RWMutex guarding the
+// rule set: many goroutines Scan while another stream of goroutines reloads.
+// Run with -race, this asserts there is no data race between Scan's snapshot and
+// ReloadRules' swap.
+func TestEngine_ReloadRules_ConcurrentWithScan(t *testing.T) {
+	awsRules := []ruleset.Rule{{ID: "aws", Regex: `AKIA[A-Z0-9]{16}`, Keywords: []string{"AKIA"}}}
+	ghRules := []ruleset.Rule{{ID: "ghp", Regex: `ghp_[0-9a-zA-Z]{36}`, Keywords: []string{"ghp_"}}}
+
+	var findings []output.Finding
+	var mu sync.Mutex
+	engine := scan.New(awsRules, &lockedSink{findings: &findings, mu: &mu})
+
+	ctx := context.Background()
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	content := newContent(line, []string{line})
+
+	var wg sync.WaitGroup
+	// Scanners.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				_, _ = engine.Scan(ctx, content)
+			}
+		}()
+	}
+	// Reloaders alternating between the two rule sets.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				if (id+j)%2 == 0 {
+					engine.ReloadRules(awsRules)
+				} else {
+					engine.ReloadRules(ghRules)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	// No assertion on findings count (it depends on interleaving); the test
+	// passes if -race reports no data race and nothing panics.
 }
 
 // TestEngine_Confidence_Bounded verifies that confidence never exceeds 1.0.

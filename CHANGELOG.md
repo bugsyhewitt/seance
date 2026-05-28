@@ -6,6 +6,23 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Signature hot-reload via SIGHUP** (pipeline + scan engine)
+- Sending `SIGHUP` to a running séance re-reads the `--signatures` file and
+  swaps the active rule set atomically — no restart, no lost ETag, no reset of
+  the seen-commit dedup set or poll cadence. Built for the run-for-days
+  deployment séance targets.
+- `Engine.ReloadRules` swaps the rule set under an `RWMutex`; `Scan` snapshots
+  the rules under a read lock, so reloads are safe concurrent with scanning.
+  `Engine.RuleCount` added for observability.
+- Reloads are fail-safe: a missing file, malformed TOML, or a file parsing to
+  zero rules is logged to stderr and the previously active rules are preserved —
+  a bad edit can never silence the monitor. A successful reload logs the new
+  rule count.
+- Tests: `internal/scan/engine_test.go` adds rule-swap, empty-reload, and a
+  `-race` concurrent Scan/ReloadRules test; `cmd/seance/reload_test.go` covers
+  swap-on-change, keep-on-parse-error, keep-on-missing-file, skip-empty, and a
+  smoke load of the real default ruleset.
+
 **Force-push / zero-commit detection** (ingestion + fetch)
 - `CommitEvent` now carries `ForcePush bool` and `BeforeSHA string`. The GitHub
   provider detects the force-push (history-rewrite) shape — HEAD reset backward

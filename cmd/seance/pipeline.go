@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
@@ -53,6 +55,26 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	defer sink.Close()
 
 	engine := scan.New(rs.Rules, sink)
+
+	// SIGHUP hot-reloads the signatures file into the running engine without a
+	// restart — so a long-running monitor can pick up new rules while keeping its
+	// in-memory ETag, poll cadence, and seen-commit dedup set intact. A failed
+	// reload (missing file, bad TOML, empty rule set) is logged and ignored: the
+	// previously loaded rules stay active so a typo never silences the monitor.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				reloadSignatures(engine, c.SignaturesPath)
+			}
+		}
+	}()
+
 	provider := ghprovider.NewWithBaseURL(c.GitHubToken, "https://api.github.com")
 	provider.DetectForcePush = c.ForcePush
 	fetcher := fetch.NewGitHubFetcher(c.GitHubToken, "https://api.github.com")
@@ -239,4 +261,23 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			return nil
 		}
 	}
+}
+
+// reloadSignatures re-reads the signatures file at path and swaps the engine's
+// active rule set on success. On any failure — unreadable file, malformed TOML,
+// or a file that parses to zero rules — it logs to stderr and leaves the
+// currently active rules untouched, so a bad edit can never silence a running
+// monitor. Triggered by SIGHUP.
+func reloadSignatures(engine *scan.Engine, path string) {
+	rs, err := ruleset.LoadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "séance: SIGHUP reload failed (%s): %v — keeping %d active rules\n", path, err, engine.RuleCount())
+		return
+	}
+	if len(rs.Rules) == 0 {
+		fmt.Fprintf(os.Stderr, "séance: SIGHUP reload skipped (%s): file contains 0 rules — keeping %d active rules\n", path, engine.RuleCount())
+		return
+	}
+	engine.ReloadRules(rs.Rules)
+	fmt.Fprintf(os.Stderr, "séance: SIGHUP reload — loaded %d rules from %s\n", len(rs.Rules), path)
 }
