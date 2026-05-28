@@ -134,6 +134,13 @@ seance --force-push=false
 
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'
+
+# Page a human channel in real time: POST every high-confidence finding
+# to a webhook in addition to the stdout NDJSON stream.
+seance \
+  --webhook-url https://hooks.example.com/seance \
+  --webhook-header "Authorization:Bearer $ALERT_TOKEN" \
+  --webhook-min-confidence 0.85
 ```
 
 ### Output format
@@ -169,6 +176,47 @@ value itself:
 
 Raw secret material is never written to disk, logs, or any output. This is a
 hard invariant, not a configuration option.
+
+### Webhook alerting
+
+A monitor nobody is watching is useless. By default séance writes NDJSON to
+stdout; pass `--webhook-url` to *also* POST each finding to an HTTP endpoint so
+alerts reach a human channel (your own relay, a SIEM, a chat-bridge service) the
+moment they happen.
+
+```bash
+seance \
+  --webhook-url https://hooks.example.com/seance \
+  --webhook-header "Authorization:Bearer $ALERT_TOKEN" \
+  --webhook-min-confidence 0.85
+```
+
+| Flag | Description |
+|------|-------------|
+| `--webhook-url` | Endpoint each finding is `POST`ed to as JSON. Empty (default) disables the webhook sink. |
+| `--webhook-header KEY:VALUE` | Header added to every request. **Repeatable.** Only the first `:` is the separator, so values may contain colons (e.g. `Authorization:Bearer x:y`). |
+| `--webhook-min-confidence` | Only findings with `confidence` at or above this value (0.0–1.0) are sent. Defaults to `0` (alert on everything). Tune it against the confidence score to trade recall for signal. |
+
+Behavior and guarantees:
+
+- **Same body, fully redacted.** The POST body is exactly the NDJSON `Finding`
+  object shown above. Because `Finding` has no raw field, the never-emit-raw-
+  secrets invariant holds for the webhook for free.
+- **Content type** is `application/json`; configured headers are applied to every
+  request.
+- **Non-blocking.** Findings are handed to a bounded in-memory queue drained by a
+  background worker. A slow or hung endpoint can never apply backpressure to the
+  scanner. If the queue fills, overflow findings are dropped and counted rather
+  than stalling the pipeline.
+- **Fail open.** A non-2xx response or transport error is logged to stderr and
+  the run continues — a dead alerting channel never takes down the monitor.
+- **Observable.** The stderr metrics line gains `alerts_sent_total`,
+  `alerts_failed_total`, and `alerts_dropped_total` so you can see delivery
+  health at a glance.
+
+This is a generic webhook. Slack/Discord/Telegram-specific message formatters can
+sit as a thin relay in front of it, or land later as additional sinks — the
+output layer fans out to any number of sinks.
 
 ---
 

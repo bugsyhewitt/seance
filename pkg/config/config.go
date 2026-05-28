@@ -28,6 +28,14 @@ type Config struct {
 	// Output
 	OutputFormat string `yaml:"output_format"` // "json", "sarif" (v0.3+)
 	OutputPath   string `yaml:"output_path"`   // "-" for stdout
+
+	// Webhook alerting sink. When WebhookURL is non-empty, each Finding (above
+	// WebhookMinConfidence) is POSTed as JSON to the endpoint in addition to the
+	// stdout NDJSON stream. Delivery is non-blocking: a slow or dead endpoint
+	// never stalls or fails the scan.
+	WebhookURL           string   `yaml:"webhook_url"`
+	WebhookHeaders       []string `yaml:"webhook_headers"`        // each "Key:Value"
+	WebhookMinConfidence float64  `yaml:"webhook_min_confidence"` // only alert at/above this score
 }
 
 // Defaults returns a Config with sensible defaults.
