@@ -183,6 +183,10 @@ seance 2>seance.log | jq 'select(.confidence > 0.8)'
 # Falls back to NDJSON automatically when stdout is piped or redirected.
 seance --tui
 
+# Keep a durable, machine-readable record while watching the live feed: the TUI
+# takes over stdout, --output-file captures every finding as NDJSON to a file.
+seance --tui --output-file findings.ndjson
+
 # Page a human channel in real time: POST every high-confidence finding
 # to a webhook in addition to the stdout NDJSON stream.
 seance \
@@ -264,6 +268,38 @@ seance --tui | jq .
 
 The TUI sink, like every séance sink, only ever renders the already-redacted
 `Finding`; the never-emit-raw-secrets invariant is preserved unchanged.
+
+### Durable output file (`--output-file`)
+
+By default findings stream as NDJSON to stdout. `--output-file` *additionally*
+appends every finding to a file on disk, independent of whatever stdout is doing.
+The primary use is pairing it with `--tui`: the live feed owns stdout, so without
+a file sink the machine-readable stream that `jq` or a SIEM loader needs has
+nowhere to go. With `--output-file` you watch the colored wall **and** keep a
+durable record at the same time:
+
+```bash
+# Live feed on the terminal, durable NDJSON record on disk — both at once.
+seance --tui --output-file findings.ndjson
+
+# Without --tui it is a simple tee: NDJSON to stdout for a live pipe AND to a file.
+seance --output-file logs/seance.ndjson | jq 'select(.confidence > 0.9)'
+```
+
+| Flag | Description |
+|------|-------------|
+| `--output-file` | Append redacted NDJSON findings to this file in addition to stdout. The parent directory is created if missing. `-` or empty (default) means stdout only. |
+
+Behavior and guarantees:
+
+- **Same redacted body.** Each line is exactly the NDJSON `Finding` object shown
+  in [Output format](#output-format). Because `Finding` has no raw field, the
+  never-emit-raw-secrets invariant holds for the file for free — it can never
+  contain a usable secret.
+- **Append, never truncate.** The file is opened in append mode, so restarting
+  séance extends the record instead of erasing prior findings.
+- **Auto-created path.** A missing parent directory is created
+  (`--output-file logs/seance.ndjson` works without a prior `mkdir`).
 
 ### Webhook alerting
 

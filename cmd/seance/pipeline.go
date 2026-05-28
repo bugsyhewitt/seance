@@ -18,6 +18,7 @@ import (
 	ghprovider "github.com/bugsyhewitt/seance/internal/ingestion/github"
 	searchprovider "github.com/bugsyhewitt/seance/internal/ingestion/search"
 	"github.com/bugsyhewitt/seance/internal/output"
+	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	"github.com/bugsyhewitt/seance/internal/output/tui"
 	"github.com/bugsyhewitt/seance/internal/output/webhook"
@@ -66,6 +67,21 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	// out from the same Scan via the variadic engine constructor.
 	primary := primaryStdoutSink(c)
 	sinks := []output.Sink{primary}
+
+	// Optional durable NDJSON file sink. When --output-file is set, every finding
+	// is ALSO appended (redacted) to that file in addition to whatever is on
+	// stdout. This is what lets --tui (which takes over stdout with the live feed)
+	// still produce a machine-readable record, and serves as a plain tee otherwise.
+	// OutputPath defaults to "-" (stdout, handled by the primary sink); any other
+	// value names a real file. Append-mode, so a restart extends the record.
+	if c.OutputPath != "" && c.OutputPath != "-" {
+		fileSink, ferr := outfile.New(c.OutputPath)
+		if ferr != nil {
+			return fmt.Errorf("output file: %w", ferr)
+		}
+		sinks = append(sinks, fileSink)
+		fmt.Fprintf(os.Stderr, "séance: writing redacted NDJSON findings to %s\n", c.OutputPath)
+	}
 
 	// Optional webhook alerting sink. Constructed only when a URL is configured.
 	// Its Close (drain + flush) runs after the stdout sink's, both via defers.

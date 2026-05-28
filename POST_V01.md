@@ -154,3 +154,51 @@ Medium-large — ~2.5–3 days. New provider + separate rate-limit governor + mu
 
 ### Rationale
 Adds a *complementary* coverage axis (targeted/indexed vs. firehose/fresh) that maps onto the highest-value real-world use case — monitoring your own org's perimeter, where GitGuardian notes 80% of corporate leaks actually surface in developers' personal repos. Ranked MEDIUM because it's a meaningful new subsystem with its own rate-limit risk surface, and the global events stream remains the v0.1 thesis; this broadens reach without being prerequisite to it. Slots naturally after the core hardening and alerting items.
+
+---
+
+## Item 8 — Durable NDJSON output file (`--output-file`) (Priority: HIGH)
+
+> **STATUS: IMPLEMENTED** (R10). New `internal/output/file` package implementing
+> `output.Sink`: appends each redacted `Finding` as NDJSON to a file, with the
+> parent directory auto-created and the file opened in append mode so a restart
+> extends rather than truncates the record. Wired in `cmd/seance/pipeline.go`
+> behind `--output-file`, which finally reads the previously dead
+> `config.OutputPath` field (declared and defaulted to `"-"` since v0.1 but never
+> consumed anywhere). The file sink fans out from the same scan engine alongside
+> the primary stdout sink, so it composes with `--tui` and the webhook sink
+> unchanged. With `--output-file` unset or `"-"` the path is byte-for-byte
+> identical to before. New unit tests in `internal/output/file` (write/round-trip,
+> multi-finding, parent-dir creation, append-not-truncate, idempotent Close,
+> no-raw-leak, bad-path error) plus a `cmd/seance` integration test proving the
+> file sink tees alongside stdout through the real engine. README updated.
+
+### What
+seance had no way to keep a durable, machine-readable record of findings while
+also using the live terminal feed. The TUI takes over stdout, so `--tui` and the
+NDJSON stream were mutually exclusive — Item 6 explicitly flagged this ("TUI to
+stdout, NDJSON redirectable to a file via a future file sink or `--output-file`").
+On top of that, `config.OutputPath` was *shipped-but-dead*: declared, defaulted to
+`"-"`, documented by its own presence, but never read by any code path — the same
+correctness-debt category the roadmap weighted up for Items 1 and 4.
+
+### How
+- New `internal/output/file` sink: buffered, append-mode (`O_APPEND|O_CREATE`),
+  parent dir created via `os.MkdirAll`, flush-on-`Close`, idempotent `Close`,
+  mutex-guarded `Emit`. Body is the identical redacted NDJSON `Finding`.
+- `--output-file` flag bound to the existing `cfg.OutputPath`; pipeline adds the
+  file sink to the sink slice when the value is a real path (not `""`/`"-"`).
+- Tests: sink unit coverage + a `cmd/seance` integration test that fans one
+  finding through the real scan engine to both the stdout and file sinks.
+
+### Effort estimate
+Small — ~0.5 day. ~90 lines of sink + wiring + tests, no new dependencies, no
+architecture change (the variadic-sink fan-out already existed).
+
+### Rationale
+Highest value-to-effort gap remaining after the gated Item 5: it discharges the
+limitation Item 6 named, makes an already-half-built config field real (closing
+correctness debt for almost nothing), and turns seance into a proper tee — live
+feed for a human, durable NDJSON for tooling/SIEM — without touching the data
+path or the never-store-raw invariant (the file only ever holds redacted
+`Finding`s, exactly like every other sink).
