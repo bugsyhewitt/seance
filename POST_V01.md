@@ -128,6 +128,18 @@ Pure usability/adoption win with no risk to the data path — it's just another 
 
 ## Item 7 — Search-API ingestion provider for targeted/org monitoring (Priority: MEDIUM)
 
+> **STATUS: IMPLEMENTED** (R9). New `internal/ingestion/search` provider polls
+> `GET /search/commits` for operator-supplied `--watch` keywords, governing its
+> own cadence against the stricter Search-API quota (30 req/min auth) with two-way
+> adaptive backoff/recovery. Emitted `CommitEvent`s (`provider: "search"`,
+> `FilesKnown=false`) fan into the same downstream pipeline via a new
+> `mergeProviders` channel-merge in `cmd/seance/pipeline.go`; prefilter, fetch,
+> scan, dedup, and all sinks are reused unchanged. Search counters added to the
+> metrics line (`search_requests_total`, `search_results_total`,
+> `search_commits_total`, `search_rate_limit_remaining`). Fixture-based tests, no
+> live CI calls. With no `--watch` keywords the provider is absent and the
+> events-only path is byte-for-byte unchanged. README updated.
+
 ### What
 gitGraber's whole model is keyword/org-scoped monitoring of GitHub's *code search* index — "watch for `acme-corp` + secret patterns" — which catches leaks the events firehose misses (indexed files, not just fresh pushes) and is how bug-bounty hunters got reports in 30 seconds. seance has exactly one ingestion provider (the global events stream). The `ingestion.Provider` interface was *explicitly designed* to support providers that "only support targeted repository scanning" (per its doc comment), so this is a sanctioned extension point, not a redesign.
 

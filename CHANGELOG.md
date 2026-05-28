@@ -6,6 +6,32 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Targeted / org-scoped Search-API monitoring (`--watch`)** (ingestion + pipeline) — POST_V01 Item 7
+- New `internal/ingestion/search` provider implementing `ingestion.Provider`:
+  polls GitHub's commit Search API (`GET /search/commits`) for operator-supplied
+  `--watch` keywords (repeatable, e.g. `--watch acme-corp`). A complementary
+  coverage axis to the global events firehose — it catches leaks sitting in the
+  indexed corpus (repos pushed before séance started, forks, commits that
+  scrolled off the events window) that the firehose never sees.
+- Governs its own cadence against the Search API's separate, much stricter quota
+  (30 req/min authenticated; 10/min unauthenticated): conservative ~90s sweeps
+  with two-way adaptive backoff/recovery, fully independent of the events poller's
+  core-API budget.
+- Emitted `CommitEvent`s (`provider: "search"`, `FilesKnown=false`) fan into the
+  same downstream pipeline via a new `mergeProviders` channel-merge in
+  `cmd/seance/pipeline.go`; prefilter, fetch, scan, dedup, redaction, and every
+  sink (NDJSON / TUI / webhook) are reused unchanged. Multi-provider support is
+  purely additive at the ingestion edge.
+- New metrics on the stderr line: `search_requests_total`,
+  `search_results_total`, `search_commits_total`, `search_rate_limit_remaining`.
+- Off by default: with no `--watch` keywords the search provider is absent
+  entirely and the events-only path is byte-for-byte unchanged. Intra-run dedup
+  prevents the stable Search top-results from spamming the channel between polls;
+  cross-run dedup remains the pipeline's job.
+- Fixture-based tests (`testdata/search_commits.json`), zero live calls in CI.
+  The `mergeProviders` channel-merge is race-tested.
+- New flag: `--watch` (repeatable).
+
 **Live terminal feed (`--tui`)** (output + pipeline) — POST_V01 Item 6
 - New `internal/output/tui` package implementing `output.Sink`: a scrolling,
   confidence-colored wall of recent findings above running counters (total
