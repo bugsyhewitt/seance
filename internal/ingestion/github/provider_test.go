@@ -71,9 +71,15 @@ func TestProvider_ParsesPushEvents_NewFormat(t *testing.T) {
 	defer cancel()
 
 	events, errs := p.Stream(ctx)
-	var got []struct{ sha string; filesKnown bool }
+	var got []struct {
+		sha        string
+		filesKnown bool
+	}
 	for e := range events {
-		got = append(got, struct{ sha string; filesKnown bool }{e.CommitSHA, e.FilesKnown})
+		got = append(got, struct {
+			sha        string
+			filesKnown bool
+		}{e.CommitSHA, e.FilesKnown})
 	}
 	if err := <-errs; err != nil && err.Error() != "context deadline exceeded" {
 		t.Fatalf("unexpected error: %v", err)
@@ -87,6 +93,110 @@ func TestProvider_ParsesPushEvents_NewFormat(t *testing.T) {
 	}
 	if got[0].filesKnown {
 		t.Error("new-format event must have FilesKnown=false")
+	}
+}
+
+// TestProvider_DetectsForcePush verifies that a force-push (history-rewrite)
+// event is emitted with ForcePush=true and the before SHA as the scan target,
+// while a normal forward push and a branch creation are not flagged.
+func TestProvider_DetectsForcePush(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/events_forcepush.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Poll-Interval", "60")
+		w.Header().Set("ETag", `"etagfp"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	p := ghprovider.NewWithBaseURL("", srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events, errs := p.Stream(ctx)
+	type ev struct {
+		sha       string
+		before    string
+		forcePush bool
+	}
+	var got []ev
+	for e := range events {
+		got = append(got, ev{e.CommitSHA, e.BeforeSHA, e.ForcePush})
+	}
+	if err := <-errs; err != nil && err.Error() != "context deadline exceeded" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("expected 3 commit events (force-push + forward + branch-create), got %d", len(got))
+	}
+
+	// Event 1: forced=true → force-push, carries the before SHA.
+	if !got[0].forcePush {
+		t.Error("event 1 (forced=true) should be flagged ForcePush")
+	}
+	if got[0].before != "2222222222222222222222222222222222222222" {
+		t.Errorf("event 1 before SHA = %q, want the prior tip", got[0].before)
+	}
+	if got[0].sha != "1111111111111111111111111111111111111111" {
+		t.Errorf("event 1 head SHA = %q", got[0].sha)
+	}
+
+	// Event 2: normal forward push with distinct commits → not a force-push.
+	if got[1].forcePush {
+		t.Error("event 2 (normal forward push) must not be flagged ForcePush")
+	}
+
+	// Event 3: branch creation (before == zero SHA) → not a force-push.
+	if got[2].forcePush {
+		t.Error("event 3 (branch creation) must not be flagged ForcePush")
+	}
+
+	if n := atomic.LoadUint64(&p.Metrics.ForcePushesReceived); n != 1 {
+		t.Errorf("ForcePushesReceived = %d, want 1", n)
+	}
+}
+
+// TestProvider_ForcePushDisabled verifies that with DetectForcePush=false the
+// force-push event falls back to a normal (unflagged) new-format event.
+func TestProvider_ForcePushDisabled(t *testing.T) {
+	fixture, _ := os.ReadFile("testdata/events_forcepush.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Poll-Interval", "60")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	p := ghprovider.NewWithBaseURL("", srv.URL)
+	p.DetectForcePush = false
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events, _ := p.Stream(ctx)
+	var anyForcePush bool
+	var count int
+	for e := range events {
+		count++
+		if e.ForcePush {
+			anyForcePush = true
+		}
+	}
+	if anyForcePush {
+		t.Error("no event should be flagged ForcePush when DetectForcePush=false")
+	}
+	if count != 3 {
+		t.Errorf("expected 3 events, got %d", count)
+	}
+	if n := atomic.LoadUint64(&p.Metrics.ForcePushesReceived); n != 0 {
+		t.Errorf("ForcePushesReceived = %d, want 0 when disabled", n)
 	}
 }
 

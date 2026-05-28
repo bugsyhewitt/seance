@@ -20,9 +20,9 @@ const maxFilesThreshold = 50
 
 // Decision carries the outcome of filtering a single commit event.
 type Decision struct {
-	Keep  bool
-	Files []ingestion.FileRef // filtered subset worth fetching
-	Reason string             // human-readable reason for Keep=false (observability)
+	Keep   bool
+	Files  []ingestion.FileRef // filtered subset worth fetching
+	Reason string              // human-readable reason for Keep=false (observability)
 }
 
 // suspiciousExtensions are file extensions that frequently contain secrets.
@@ -50,6 +50,14 @@ func Filter(event ingestion.CommitEvent) Decision {
 	if strings.HasSuffix(event.AuthorName, "[bot]") ||
 		strings.HasSuffix(event.AuthorEmail, "[bot]") {
 		return Decision{Keep: false, Reason: "bot commit"}
+	}
+
+	// Force-push events are the highest-signal indicator of intentional secret
+	// removal, so they always pass through even though file paths are unknown
+	// (FilesKnown=false). The pipeline recovers the orphaned diff via the
+	// compare API and applies post-fetch path filtering.
+	if event.ForcePush {
+		return Decision{Keep: true, Files: nil, Reason: "force-push"}
 	}
 
 	if !event.FilesKnown {

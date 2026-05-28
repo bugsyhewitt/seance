@@ -6,6 +6,19 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Force-push / zero-commit detection** (ingestion + fetch)
+- `CommitEvent` now carries `ForcePush bool` and `BeforeSHA string`. The GitHub
+  provider detects the force-push (history-rewrite) shape — HEAD reset backward
+  with no distinct commits, or the payload's `forced` flag — and emits a flagged
+  event carrying the now-dangling `before` SHA as the scan target. Branch
+  creations and deletions (zero SHA) are excluded.
+- `Fetcher.FetchCompare` recovers the diff orphaned by a force-push via
+  `GET /repos/{o}/{r}/compare/{head}...{before}`, scanning the commit(s) a
+  developer tried to bury. Costs one extra request per force-push only.
+- Prefilter passes force-push events through even when file paths are unknown.
+- New `force_pushes_total` metric on the stderr metrics line.
+- Gated behind `--force-push` (default on); disable with `--force-push=false`.
+
 **Shannon entropy analysis** (scan engine)
 - `shannonEntropy(s string) float64` — bits-per-character Shannon entropy
   calculation used to distinguish random credential material from repetitive

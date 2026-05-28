@@ -12,11 +12,11 @@ import (
 // FileContent holds the fetched diff content of a single changed file.
 // Content is empty if the file was skipped (binary, oversized, or errored).
 type FileContent struct {
-	Event   ingestion.CommitEvent
-	FileRef ingestion.FileRef
-	Patch   string   // unified diff patch for this file
-	Lines   []string // patch split into lines for scanning
-	Skipped bool     // true if content was not fetched (binary, too large, error)
+	Event      ingestion.CommitEvent
+	FileRef    ingestion.FileRef
+	Patch      string   // unified diff patch for this file
+	Lines      []string // patch split into lines for scanning
+	Skipped    bool     // true if content was not fetched (binary, too large, error)
 	SkipReason string
 }
 
@@ -30,4 +30,11 @@ type Fetcher interface {
 	// Used when file paths are not known from the event payload (FilesKnown=false).
 	// Files with empty or oversized patches are returned with Skipped=true.
 	FetchAll(ctx context.Context, event ingestion.CommitEvent) ([]FileContent, error)
+
+	// FetchCompare retrieves the diff between two commits (before...head) for a
+	// force-push event. It recovers the content that was orphaned when HEAD was
+	// reset backward — the dangling commit(s) remain retrievable by SHA on GitHub
+	// for a window. event.BeforeSHA and event.CommitSHA identify the range.
+	// Files with empty or oversized patches are returned with Skipped=true.
+	FetchCompare(ctx context.Context, event ingestion.CommitEvent) ([]FileContent, error)
 }

@@ -54,7 +54,11 @@ func runPipeline(ctx context.Context, c config.Config) error {
 
 	engine := scan.New(rs.Rules, sink)
 	provider := ghprovider.NewWithBaseURL(c.GitHubToken, "https://api.github.com")
+	provider.DetectForcePush = c.ForcePush
 	fetcher := fetch.NewGitHubFetcher(c.GitHubToken, "https://api.github.com")
+	if c.ForcePush {
+		fmt.Fprintf(os.Stderr, "séance: force-push detection enabled — orphaned diffs will be recovered via the compare API\n")
+	}
 
 	// Cumulative counters — all updated atomically.
 	var (
@@ -78,6 +82,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		fetched := atomic.LoadUint64(&fetchIssued)
 		findings := atomic.LoadUint64(&findingsTotal)
 		provPush := atomic.LoadUint64(&provider.Metrics.PushEventsReceived)
+		provForcePush := atomic.LoadUint64(&provider.Metrics.ForcePushesReceived)
 		provFetch := atomic.LoadUint64(&provider.Metrics.FetchRequests)
 		rlRemaining := atomic.LoadInt64(&provider.Metrics.RateLimitRemaining)
 		rlReset := atomic.LoadInt64(&provider.Metrics.RateLimitReset)
@@ -96,9 +101,10 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		stMu.Unlock()
 
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d seen_commits_tracked=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d seen_commits_tracked=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
+			provForcePush,
 			out,
 			in-out,
 			fetched,
@@ -176,10 +182,21 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			atomic.AddUint64(&preFilterOut, 1)
 
 			if decision.Files == nil {
-				// File paths were not in the event payload (new GitHub API format).
-				// FetchAll retrieves all changed files; we then apply path filtering.
+				// File paths were not in the event payload (new GitHub API format),
+				// or this is a force-push. For a force-push we recover the diff that
+				// was orphaned by the history rewrite via the compare API; otherwise
+				// FetchAll retrieves the head commit's changed files. Either way we
+				// then apply post-fetch path filtering.
 				atomic.AddUint64(&fetchIssued, 1)
-				all, err := fetcher.FetchAll(ctx, event)
+				var (
+					all []fetch.FileContent
+					err error
+				)
+				if event.ForcePush {
+					all, err = fetcher.FetchCompare(ctx, event)
+				} else {
+					all, err = fetcher.FetchAll(ctx, event)
+				}
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "séance: fetchall error: %v\n", err)
 					continue

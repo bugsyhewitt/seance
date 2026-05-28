@@ -49,6 +49,33 @@ func TestFilter_PassesThroughUnknownFiles(t *testing.T) {
 	}
 }
 
+func TestFilter_KeepsForcePush(t *testing.T) {
+	// Force-push events must pass through even though file paths are unknown,
+	// so the pipeline can recover the orphaned diff via the compare API.
+	e := ingestion.CommitEvent{
+		AuthorName: "erin",
+		FilesKnown: false,
+		ForcePush:  true,
+		BeforeSHA:  "2222222222222222222222222222222222222222",
+	}
+	d := prefilter.Filter(e)
+	if !d.Keep {
+		t.Errorf("force-push commit should pass through, reason: %s", d.Reason)
+	}
+	if d.Files != nil {
+		t.Error("force-push pass-through should have nil Files (fetcher discovers them)")
+	}
+}
+
+func TestFilter_DropsBotForcePush(t *testing.T) {
+	// A bot force-push is still noise — the bot filter takes precedence.
+	e := ingestion.CommitEvent{AuthorName: "dependabot[bot]", ForcePush: true}
+	d := prefilter.Filter(e)
+	if d.Keep {
+		t.Error("bot force-push should be filtered out")
+	}
+}
+
 func TestFilter_KeepsEnvFile(t *testing.T) {
 	e := ingestion.CommitEvent{
 		AuthorName: "alice",

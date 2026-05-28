@@ -23,6 +23,18 @@ type CommitEvent struct {
 	Files       []FileRef
 	FilesKnown  bool // true when Files was populated from the event payload
 	Timestamp   time.Time
+
+	// ForcePush is true when this event was emitted because the push reset HEAD
+	// backward (a force-push that rewrites history). These are the highest-signal
+	// events for intentional secret removal: a developer commits a key, notices,
+	// and force-pushes history back to before the mistake. The leaked secret lives
+	// in the commit(s) that became dangling between BeforeSHA and CommitSHA.
+	ForcePush bool
+
+	// BeforeSHA is the SHA HEAD pointed at before this push. For a force-push it
+	// identifies the (now-dangling) tip whose diff would otherwise be orphaned.
+	// The fetcher compares BeforeSHA...CommitSHA to recover the buried content.
+	BeforeSHA string
 }
 
 // FileRef is a file path reference extracted from an event payload.
