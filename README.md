@@ -160,7 +160,8 @@ Each finding is one JSON line (NDJSON):
   "redacted": "sha256:3f2a1b9c",
   "confidence": 0.95,
   "tags": ["cloud", "aws"],
-  "timestamp": "2026-05-17T14:30:00Z"
+  "timestamp": "2026-05-17T14:30:00Z",
+  "fingerprint": "sha256:9b1e...c4"
 }
 ```
 
@@ -173,6 +174,13 @@ value itself:
   which credential leaked by hashing it locally.
 - **Long secrets (≥ 24 chars)**: `<first4>********************<last4>` — enough
   to confirm which key to rotate without revealing usable material.
+
+The `fingerprint` field is a stable, privacy-preserving identifier for the whole
+finding — a SHA-256 over `(rule_id, redacted, repo_owner, repo_name, file_path)`.
+It is the cross-run deduplication key and the value you copy into a
+`--suppress-file` to silence a known false positive (see
+[Deduplication & suppression](#deduplication--suppression)). Because it is built
+only from already-redacted/locator material, it never embeds raw secret bytes.
 
 Raw secret material is never written to disk, logs, or any output. This is a
 hard invariant, not a configuration option.
@@ -217,6 +225,46 @@ Behavior and guarantees:
 This is a generic webhook. Slack/Discord/Telegram-specific message formatters can
 sit as a thin relay in front of it, or land later as additional sinks — the
 output layer fans out to any number of sinks.
+
+### Deduplication & suppression
+
+At firehose volume, alert fatigue is the failure mode that gets a monitor turned
+off. An alerting tool without deduplication is a spam cannon. séance dedups
+*findings*, not just commits: the same secret re-committed across forks,
+re-pushed after a restart, or matched by two overlapping rules is alerted **once**.
+
+Every finding carries a stable `fingerprint` (see [Output format](#output-format))
+derived only from `(rule_id, redacted, repo_owner, repo_name, file_path)` — so
+identical secrets in the same place collide correctly without ever touching raw
+material. There are two suppression layers:
+
+- **Cross-run re-leak suppression (always on, no flag).** Each emitted finding's
+  fingerprint is recorded in the persistent state file (`<state-dir>/state.json`,
+  alongside the seen-commit set) and evicted on the same rolling TTL. A finding
+  whose fingerprint was already seen — this run or a prior one — is suppressed
+  instead of re-alerting.
+- **Operator suppress-list (`--suppress-file`).** A newline-delimited list of
+  fingerprints to *always* ignore — the `.gitleaksignore` analogue. Copy a
+  finding's `fingerprint` into the file to silence a known false positive. Blank
+  lines and `#` comments are allowed. Suppress-list entries are never recorded as
+  "seen", so removing one re-enables alerting immediately.
+
+```bash
+# A known false positive keeps firing — grab its fingerprint from the NDJSON
+# and drop it into a suppress file:
+echo "sha256:9b1e...c4  # test fixture key, not a real leak" >> seance.ignore
+seance --suppress-file seance.ignore
+```
+
+| Flag | Description |
+|------|-------------|
+| `--suppress-file` | Path to a newline-delimited list of finding fingerprints to always ignore. `#` comments and blank lines are skipped. Empty (default) means only known re-leaks are suppressed. |
+
+The `findings_suppressed_total` metric counts how many findings were dropped by
+either layer, and `seen_findings_tracked` reports the current size of the
+persistent fingerprint set. Because the dedup key is the privacy-preserving
+fingerprint, persisting it can never leak a credential — the never-store-raw
+invariant holds for free.
 
 ---
 
@@ -276,6 +324,11 @@ séance persists a small state file under `.seance/` (configurable with
   the window every 5 minutes — and once more on shutdown — so the set and the
   on-disk state file stay bounded for the life of the process. Reloaded on
   restart — no duplicate findings across restarts.
+- **Seen-finding set**: a map of finding fingerprints to first-seen time,
+  evicted on the same rolling TTL. This is what suppresses cross-run re-leaks
+  (see [Deduplication & suppression](#deduplication--suppression)). It stores
+  only the privacy-preserving fingerprint, never raw secret material. Reloaded
+  on restart so a re-pushed secret is not re-alerted across a restart.
 - **ETag**: cached in memory within a run for conditional polling (HTTP 304).
   Resets on restart; the first poll after restart is a full fetch, then
   conditional requests resume. One extra API call, no correctness impact.
@@ -348,7 +401,8 @@ Live metrics are written to stderr every 60 s in `key=value` format:
 ```
 séance metrics ts=1234567890 push_events_total=454 force_pushes_total=3 \
   prefilter_passed_total=405 prefilter_dropped_total=49 fetches_total=405 \
-  polls_total=17 findings_total=0 seen_commits_tracked=412 push_events_hr=1602.3 \
+  polls_total=17 findings_total=0 findings_suppressed_total=2 \
+  seen_commits_tracked=412 seen_findings_tracked=6 push_events_hr=1602.3 \
   prefilter_survival_pct=89.2 fetches_hr=1429.3 polls_hr=60.0 \
   rate_limit_remaining=4592 rate_limit_reset_in=1981
 ```
@@ -360,6 +414,11 @@ recovered via the compare API (see [Force-push detection](#force-push-detection)
 stays bounded by the 7-day TTL (see [State](#state)): a background sweep evicts
 entries older than the window every 5 minutes, and a final sweep runs on
 shutdown before the state file is persisted.
+
+`findings_suppressed_total` counts findings dropped by cross-run dedup or the
+operator suppress-list, and `seen_findings_tracked` is the current size of the
+persistent fingerprint set — both bounded by the same TTL (see
+[Deduplication & suppression](#deduplication--suppression)).
 
 Multiple tokens on one GitHub account do **not** raise the ceiling — the
 5,000/hr limit is per account, not per token.

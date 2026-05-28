@@ -15,18 +15,26 @@ import (
 // intentionally absent — only the Redacted field is populated with a masked
 // value (e.g. "AKIA********************WXYZ").
 type Finding struct {
-	RuleID      string    `json:"rule_id"`
-	RuleDesc    string    `json:"rule_description,omitempty"`
-	Provider    string    `json:"provider"`
-	RepoOwner   string    `json:"repo_owner"`
-	RepoName    string    `json:"repo_name"`
-	CommitSHA   string    `json:"commit_sha"`
-	FilePath    string    `json:"file_path"`
-	LineNumber  int       `json:"line_number"`
-	Redacted    string    `json:"redacted"`    // masked value: first/last 4 chars + stars
-	Confidence  float64   `json:"confidence"`  // 0.0–1.0
-	Tags        []string  `json:"tags,omitempty"`
-	Timestamp   time.Time `json:"timestamp"`
+	RuleID     string    `json:"rule_id"`
+	RuleDesc   string    `json:"rule_description,omitempty"`
+	Provider   string    `json:"provider"`
+	RepoOwner  string    `json:"repo_owner"`
+	RepoName   string    `json:"repo_name"`
+	CommitSHA  string    `json:"commit_sha"`
+	FilePath   string    `json:"file_path"`
+	LineNumber int       `json:"line_number"`
+	Redacted   string    `json:"redacted"`   // masked value: first/last 4 chars + stars
+	Confidence float64   `json:"confidence"` // 0.0–1.0
+	Tags       []string  `json:"tags,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+
+	// Fingerprint is a stable, privacy-preserving identifier for this finding,
+	// derived only from redacted/locator fields (never raw secret bytes). It is
+	// used for cross-run deduplication and is the value an operator copies into a
+	// --suppress-file entry to silence a known false positive. Identical secrets
+	// in the same location produce identical fingerprints, so re-leaks collide
+	// correctly without ever touching raw material.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // Sink receives Findings for output. Multiple Sinks may be composed.

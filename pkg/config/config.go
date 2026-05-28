@@ -25,6 +25,14 @@ type Config struct {
 	StateDir    string `yaml:"state_dir"`
 	SeenTTLDays int    `yaml:"seen_ttl_days"`
 
+	// SuppressFile is an optional path to a newline-delimited list of finding
+	// fingerprints (the .gitleaksignore analogue). Any finding whose fingerprint
+	// appears in this file is never emitted or alerted — the operator's
+	// always-ignore list for known false positives. Blank lines and lines
+	// beginning with '#' are ignored. Cross-run re-leak suppression (identical
+	// findings seen in a prior run) is always on and needs no flag.
+	SuppressFile string `yaml:"suppress_file"`
+
 	// Output
 	OutputFormat string `yaml:"output_format"` // "json", "sarif" (v0.3+)
 	OutputPath   string `yaml:"output_path"`   // "-" for stdout

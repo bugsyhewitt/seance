@@ -29,6 +29,11 @@ func (s *JSONFileStorage) Load() (*State, error) {
 	if st.SeenCommits == nil {
 		st.SeenCommits = make(map[string]time.Time)
 	}
+	if st.SeenFindings == nil {
+		// Older state files predate cross-run finding dedup; initialise the map
+		// so the engine can start suppressing re-leaks immediately.
+		st.SeenFindings = make(map[string]time.Time)
+	}
 	return &st, nil
 }
 
