@@ -135,6 +135,10 @@ seance --force-push=false
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'
 
+# Watch it work: a live, confidence-colored terminal feed instead of raw NDJSON.
+# Falls back to NDJSON automatically when stdout is piped or redirected.
+seance --tui
+
 # Page a human channel in real time: POST every high-confidence finding
 # to a webhook in addition to the stdout NDJSON stream.
 seance \
@@ -184,6 +188,38 @@ only from already-redacted/locator material, it never embeds raw secret bytes.
 
 Raw secret material is never written to disk, logs, or any output. This is a
 hard invariant, not a configuration option.
+
+### Live terminal feed (`--tui`)
+
+Running séance interactively, the raw NDJSON firehose is hard to read at a
+glance. `--tui` swaps the stdout stream for a live wall: a scrolling list of the
+most recent findings — colored by confidence (red high, yellow medium, green
+low) — above running counters for total findings, distinct rules hit, and peak
+confidence seen this session.
+
+```bash
+seance --tui
+```
+
+It is purely a presentation change to the primary output sink. Coverage,
+deduplication, and webhook alerting are unaffected — the same `Finding` flows to
+the same data path; only the stdout rendering differs.
+
+**Graceful degradation.** A live ANSI feed only makes sense on an interactive
+terminal. When stdout is *not* a TTY — a pipe, a redirect to a file, or CI —
+`--tui` is silently ignored and séance writes plain NDJSON instead, so a
+downstream `jq` or log store is never corrupted by escape sequences:
+
+```bash
+# --tui on a terminal: colored live feed.
+seance --tui
+
+# --tui piped: automatically falls back to NDJSON (a notice goes to stderr).
+seance --tui | jq .
+```
+
+The TUI sink, like every séance sink, only ever renders the already-redacted
+`Finding`; the never-emit-raw-secrets invariant is preserved unchanged.
 
 ### Webhook alerting
 

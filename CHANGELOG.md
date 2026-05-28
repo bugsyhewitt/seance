@@ -6,6 +6,28 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Live terminal feed (`--tui`)** (output + pipeline) — POST_V01 Item 6
+- New `internal/output/tui` package implementing `output.Sink`: a scrolling,
+  confidence-colored wall of recent findings above running counters (total
+  findings, distinct rules hit, peak confidence). Enabled with `--tui`, it makes
+  the public-events firehose watchable at a glance instead of a stream of raw
+  NDJSON. The third `Sink` implementation, fanning out from the same `Scan`.
+- Purely a presentation change to the primary stdout sink — coverage, dedup, and
+  webhook alerting are unaffected; the same `Finding` flows the same data path.
+- Graceful degradation off a TTY: when stdout is a pipe, file, or CI (`IsTTY`
+  false), `--tui` is silently ignored and séance writes plain NDJSON, so a
+  downstream `jq`/log store is never corrupted by escape sequences. A notice
+  goes to stderr.
+- Dependency-light: a small hand-rolled ANSI renderer over the stdlib, not a TUI
+  framework (honors the anti-abstraction gate). No new dependencies.
+- The TUI renders only the already-redacted `Finding`; the never-emit-raw-secrets
+  invariant holds for free.
+- New flag: `--tui`.
+- Tests: `internal/output/tui/sink_test.go` covers the non-TTY plain-line path
+  (no escape sequences), the TTY colored-frame render, ring bounding, confidence
+  color thresholds, rune-safe truncation, `IsTTY` detection, concurrent-emit
+  safety (`-race` clean), and the `output.Sink` interface conformance.
+
 **Pluggable webhook alerting sink** (output + pipeline)
 - New `internal/output/webhook` package implementing `output.Sink`: POSTs each
   finding as JSON to a configured URL with optional headers, so findings reach a

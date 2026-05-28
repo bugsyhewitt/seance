@@ -37,6 +37,14 @@ type Config struct {
 	OutputFormat string `yaml:"output_format"` // "json", "sarif" (v0.3+)
 	OutputPath   string `yaml:"output_path"`   // "-" for stdout
 
+	// TUI enables the live terminal feed: a scrolling, confidence-colored wall of
+	// recent findings with running counters, in place of the raw NDJSON stream on
+	// stdout. It is purely a presentation change to the primary sink — coverage,
+	// dedup, and alerting are unaffected. When stdout is not an interactive
+	// terminal (a pipe, a file, CI), séance silently falls back to NDJSON so
+	// downstream consumers are never corrupted by escape sequences.
+	TUI bool `yaml:"tui"`
+
 	// Webhook alerting sink. When WebhookURL is non-empty, each Finding (above
 	// WebhookMinConfidence) is POSTed as JSON to the endpoint in addition to the
 	// stdout NDJSON stream. Delivery is non-blocking: a slow or dead endpoint
