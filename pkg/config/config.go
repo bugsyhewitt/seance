@@ -48,6 +48,17 @@ type Config struct {
 	OutputFormat string `yaml:"output_format"` // "json", "sarif" (v0.3+)
 	OutputPath   string `yaml:"output_path"`   // "-" for stdout
 
+	// SarifPath is an optional path to which séance writes a SARIF 2.1.0 document
+	// of all findings observed during the run. SARIF (the OASIS Static Analysis
+	// Results Interchange Format) is ingestible by GitHub Advanced Security / code
+	// scanning, Azure DevOps, and most SARIF viewers — turning séance's stream into
+	// a report a security platform can consume. Unlike the streaming NDJSON sinks,
+	// SARIF is a single document, so it is written once on shutdown. The body is
+	// built solely from redacted Findings, so the never-store-raw invariant holds.
+	// Empty disables the SARIF sink; it composes alongside stdout, --output-file,
+	// --tui, and the webhook sink unchanged.
+	SarifPath string `yaml:"sarif_path"`
+
 	// TUI enables the live terminal feed: a scrolling, confidence-colored wall of
 	// recent findings with running counters, in place of the raw NDJSON stream on
 	// stdout. It is purely a presentation change to the primary sink — coverage,

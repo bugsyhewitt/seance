@@ -150,7 +150,7 @@ type Sink interface {
 - `ndjson` — newline-delimited JSON to stdout or file (v0.1)
 - `file` — same as ndjson but to a rolling file (v0.2)
 - `webhook` — HTTP POST per finding (v0.3)
-- `sarif` — SARIF 2.1 output, ingestible by GitHub Advanced Security (v0.3)
+- `sarif` — SARIF 2.1.0 report (`--sarif-file`), ingestible by GitHub Advanced Security (shipped)
 
 ---
 

@@ -6,6 +6,37 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**SARIF 2.1.0 report output (`--sarif-file`)** (output + config + pipeline)
+- New `internal/output/sarif` package implementing `output.Sink`: buffers each
+  redacted `Finding` and, on shutdown, writes a single SARIF 2.1.0 document
+  (`runs[].results[]` plus a deduplicated `tool.driver.rules[]` catalog) ingestible
+  by GitHub Advanced Security / code scanning, Azure DevOps, and SARIF viewers.
+  This discharges the long-documented `OutputFormat="sarif"` / v0.3 SARIF
+  direction named in `pkg/config`, `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md`
+  that no code path previously produced.
+- SARIF is a *document* format, not a stream, so the sink accumulates on `Emit`
+  and serializes once on `Close` — fitting the `output.Sink` contract exactly. A
+  clean (zero-finding) run still emits a valid empty-results report.
+- Wired in `cmd/seance/pipeline.go` behind a new `--sarif-file` flag bound to a new
+  `config.SarifPath` field; the SARIF sink fans out from the same scan engine
+  alongside stdout, so it composes with `--output-file`, `--tui`, and the webhook
+  sink unchanged. With `--sarif-file` unset the path is byte-for-byte identical to
+  before.
+- Each result is built solely from the redacted `Finding`: the redacted value and
+  stable fingerprint land in `partialFingerprints`, the repo/commit/path in the
+  artifact location, and confidence in `properties` (and is bucketed onto SARIF's
+  `result.level`: `≥0.8`→`error`, `≥0.5`→`warning`, else `note`). `Finding` has no
+  raw field, so the never-emit-raw-secrets invariant holds for free. The report is
+  written atomically (temp file + rename) so a crash mid-write never leaves a
+  half-written document. The séance build version is recorded as the tool driver
+  version.
+- Tests: new `internal/output/sarif/sink_test.go` (document envelope, field
+  mapping, rule-catalog dedup, partialFingerprints, confidence→level buckets,
+  no-raw-leak, idempotent Close, parent-dir creation, empty-results validity,
+  atomic no-temp-leftover) plus a `cmd/seance` integration test proving the SARIF
+  sink tees alongside stdout through the real scan engine. `-race` clean. README
+  updated.
+
 **ETag persistence across restarts** (ingestion + state + pipeline)
 - The GitHub events ETag is now persisted to the state file and reloaded on
   startup, closing a v0.1 known limitation ("ETag is not persisted across

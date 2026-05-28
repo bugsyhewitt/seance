@@ -15,6 +15,7 @@ import (
 	"github.com/bugsyhewitt/seance/internal/output"
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
+	"github.com/bugsyhewitt/seance/internal/output/sarif"
 	"github.com/bugsyhewitt/seance/internal/prefilter"
 	"github.com/bugsyhewitt/seance/internal/scan"
 	"github.com/bugsyhewitt/seance/internal/scan/ruleset"
@@ -164,6 +165,82 @@ func TestEndToEnd_FileSinkTeesAlongsideStdout(t *testing.T) {
 		t.Error("file sink output must not contain raw secret value")
 	}
 	// The file record and the stdout record describe the same finding.
+	if !strings.Contains(stdoutBuf.String(), "aws-test") {
+		t.Errorf("stdout sink should also have received the finding: %q", stdoutBuf.String())
+	}
+}
+
+// TestEndToEnd_SarifSinkTeesAlongsideStdout exercises the --sarif-file
+// composition: the same Finding fans out through the real scan engine to BOTH the
+// stdout NDJSON sink and the SARIF sink (as the pipeline wires them when
+// --sarif-file is set). It asserts the SARIF document captures the identical
+// redacted finding as a valid result, and never the raw secret.
+func TestEndToEnd_SarifSinkTeesAlongsideStdout(t *testing.T) {
+	event := ingestion.CommitEvent{
+		Provider: "fake", RepoOwner: "alice", RepoName: "repo",
+		CommitSHA: "deadbeef", AuthorName: "alice",
+		Files:      []ingestion.FileRef{{Path: ".env", Status: "added"}},
+		FilesKnown: true,
+	}
+
+	ctx := context.Background()
+
+	rules := []ruleset.Rule{{
+		ID: "aws-test", Description: "AWS test key", Regex: `AKIA[A-Z0-9]{16}`,
+		Keywords: []string{"AKIA"},
+	}}
+
+	var stdoutBuf bytes.Buffer
+	path := filepath.Join(t.TempDir(), "scan.sarif")
+	sarifSink := sarif.New(path, "0.2.0-test")
+	engine := scan.New(rules, ndjson.New(&stdoutBuf), sarifSink)
+
+	d := prefilter.Filter(event)
+	for _, ref := range d.Files {
+		fc := fetch.FileContent{
+			Event:   event,
+			FileRef: ref,
+			Patch:   "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
+			Lines:   []string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+		}
+		if _, err := engine.Scan(ctx, fc); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+	}
+	// SARIF is written once on Close (mirrors the pipeline's deferred Close).
+	if err := sarifSink.Close(); err != nil {
+		t.Fatalf("sarif sink close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read sarif: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse sarif: %v\n%s", err, string(data))
+	}
+	if doc["version"] != "2.1.0" {
+		t.Errorf("sarif version: got %v want 2.1.0", doc["version"])
+	}
+	run := doc["runs"].([]any)[0].(map[string]any)
+	results := run["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 sarif result, got %d: %s", len(results), string(data))
+	}
+	res := results[0].(map[string]any)
+	if res["ruleId"] != "aws-test" {
+		t.Errorf("sarif ruleId: got %v want aws-test", res["ruleId"])
+	}
+	loc := res["locations"].([]any)[0].(map[string]any)
+	uri := loc["physicalLocation"].(map[string]any)["artifactLocation"].(map[string]any)["uri"].(string)
+	if !strings.Contains(uri, "alice/repo") || !strings.Contains(uri, ".env") {
+		t.Errorf("sarif artifact uri missing repo/path: %q", uri)
+	}
+	if strings.Contains(string(data), "AKIAIOSFODNN7EXAMPLE") {
+		t.Error("SARIF output must not contain raw secret value")
+	}
+	// The SARIF report and the stdout record describe the same finding.
 	if !strings.Contains(stdoutBuf.String(), "aws-test") {
 		t.Errorf("stdout sink should also have received the finding: %q", stdoutBuf.String())
 	}
