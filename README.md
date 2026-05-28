@@ -403,9 +403,9 @@ Community contributions to `signatures/` are welcome. Please include:
 ### Hot-reload (SIGHUP)
 
 séance is built to run for days. When you add or tune a rule, you should not
-have to restart it — restarting throws away the in-memory ETag (forcing a full
-re-poll) and the warm rate-limit state. Instead, edit the signatures file in
-place and send the process `SIGHUP`:
+have to restart it — even though the ETag now survives a restart, a restart
+still drops the warm rate-limit/poll-cadence state and interrupts the stream.
+Instead, edit the signatures file in place and send the process `SIGHUP`:
 
 ```bash
 # Edit your rules...
@@ -445,9 +445,13 @@ séance persists a small state file under `.seance/` (configurable with
   (see [Deduplication & suppression](#deduplication--suppression)). It stores
   only the privacy-preserving fingerprint, never raw secret material. Reloaded
   on restart so a re-pushed secret is not re-alerted across a restart.
-- **ETag**: cached in memory within a run for conditional polling (HTTP 304).
-  Resets on restart; the first poll after restart is a full fetch, then
-  conditional requests resume. One extra API call, no correctness impact.
+- **ETag**: the last GitHub events ETag, used for conditional polling
+  (`If-None-Match` → HTTP 304 when nothing new happened). It is now persisted
+  to the state file and reloaded on restart, so the **first poll after a restart
+  is a conditional request, not a full cold fetch** — a restart no longer
+  re-pulls and re-prefilters the whole events page. If the cursor has expired
+  server-side, GitHub simply answers 200 with a fresh page and a new ETag, so
+  there is no correctness impact either way.
 
 On first run séance starts fresh. On SIGINT/SIGTERM it flushes state and
 exits 0. On SIGHUP it hot-reloads the signatures file without exiting (see
