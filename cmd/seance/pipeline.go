@@ -20,6 +20,7 @@ import (
 	"github.com/bugsyhewitt/seance/internal/output"
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
+	"github.com/bugsyhewitt/seance/internal/output/sarif"
 	"github.com/bugsyhewitt/seance/internal/output/tui"
 	"github.com/bugsyhewitt/seance/internal/output/webhook"
 	"github.com/bugsyhewitt/seance/internal/prefilter"
@@ -81,6 +82,19 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 		sinks = append(sinks, fileSink)
 		fmt.Fprintf(os.Stderr, "séance: writing redacted NDJSON findings to %s\n", c.OutputPath)
+	}
+
+	// Optional SARIF report sink. When --sarif-file is set, every finding is ALSO
+	// buffered (redacted) and written as a single SARIF 2.1.0 document on shutdown,
+	// ingestible by GitHub code scanning and other SARIF tooling. Unlike the
+	// streaming sinks it produces one document on Close (ordered before the final
+	// state flush by the deferred-Close loop below), so a clean run still emits a
+	// valid empty-results report. With --sarif-file unset it is absent entirely and
+	// the existing data path is byte-for-byte unchanged.
+	if c.SarifPath != "" {
+		sarifSink := sarif.New(c.SarifPath, c.Version)
+		sinks = append(sinks, sarifSink)
+		fmt.Fprintf(os.Stderr, "séance: writing SARIF 2.1.0 report to %s on shutdown\n", c.SarifPath)
 	}
 
 	// Optional webhook alerting sink. Constructed only when a URL is configured.

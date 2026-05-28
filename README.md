@@ -301,6 +301,47 @@ Behavior and guarantees:
 - **Auto-created path.** A missing parent directory is created
   (`--output-file logs/seance.ndjson` works without a prior `mkdir`).
 
+### SARIF report (`--sarif-file`)
+
+[SARIF](https://sarif.info) (the OASIS *Static Analysis Results Interchange
+Format*, 2.1.0) is the standard report format that GitHub Advanced Security /
+code scanning, Azure DevOps, and most security viewers ingest. Pass
+`--sarif-file` to *also* write a SARIF document of every finding the run
+observed — turning séance's live stream into a report a security platform can
+load, triage, and track.
+
+```bash
+# Stream NDJSON to stdout as usual AND write a SARIF report on shutdown.
+seance --sarif-file scan.sarif
+
+# Compose freely: live feed on the terminal, durable NDJSON on disk,
+# and a SARIF report for your security platform — all at once.
+seance --tui --output-file findings.ndjson --sarif-file reports/scan.sarif
+```
+
+| Flag | Description |
+|------|-------------|
+| `--sarif-file` | Write a SARIF 2.1.0 report of all findings to this file in addition to whatever else is configured. The parent directory is created if missing. Empty (default) disables the SARIF sink. |
+
+Behavior and guarantees:
+
+- **One document, written on shutdown.** Unlike the streaming NDJSON sinks, SARIF
+  is a single document with a `runs[].results[]` array and a deduplicated
+  `tool.driver.rules[]` catalog, so it is buffered in memory and written once when
+  séance stops (Ctrl-C / SIGTERM). A clean run with zero findings still produces a
+  valid empty-results report.
+- **Same redacted body.** Each result is built solely from the redacted `Finding`
+  — the redacted value and stable fingerprint land in `partialFingerprints`, the
+  repo/commit/path in the result's artifact location, and séance's confidence in
+  `properties`. Because `Finding` has no raw field, the never-emit-raw-secrets
+  invariant holds for the SARIF report for free.
+- **Confidence → level.** séance's 0–1 confidence maps onto SARIF's `result.level`:
+  `≥ 0.8` → `error`, `≥ 0.5` → `warning`, otherwise `note`.
+- **Atomic write.** The report is written via a temp file and renamed into place,
+  so a crash mid-write never leaves a half-written document a SARIF consumer would
+  reject. The parent directory is auto-created (`--sarif-file reports/scan.sarif`
+  works without a prior `mkdir`).
+
 ### Webhook alerting
 
 A monitor nobody is watching is useless. By default séance writes NDJSON to
