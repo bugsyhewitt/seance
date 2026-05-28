@@ -124,6 +124,11 @@ seance --token ghp_your_token_here
 # Custom signatures file
 seance --signatures /path/to/rules.toml
 
+# Hot-reload signatures into a running séance without a restart:
+# edit the file, then send SIGHUP. The process keeps its ETag, poll
+# cadence, and seen-commit dedup set — only the rules change.
+kill -HUP $(pgrep -f '^seance')
+
 # Disable force-push (history-rewrite) recovery
 seance --force-push=false
 
@@ -183,6 +188,35 @@ Community contributions to `signatures/` are welcome. Please include:
 - `keywords` for fast pre-scan matching
 - An `allowlist.stopwords` block for known test/dummy values
 
+### Hot-reload (SIGHUP)
+
+séance is built to run for days. When you add or tune a rule, you should not
+have to restart it — restarting throws away the in-memory ETag (forcing a full
+re-poll) and the warm rate-limit state. Instead, edit the signatures file in
+place and send the process `SIGHUP`:
+
+```bash
+# Edit your rules...
+vim my-rules.toml
+
+# ...then reload them into the running process.
+kill -HUP <pid>
+```
+
+séance re-reads the **same** `--signatures` path it was started with and swaps
+the active rule set atomically. The poll loop, ETag, seen-commit dedup set, and
+metrics counters all continue uninterrupted; an in-flight scan finishes against
+the rules it started with, and the next scan uses the new set.
+
+Reloads are **fail-safe**: if the file is missing, contains invalid TOML, or
+parses to zero rules, séance logs the problem to stderr and **keeps the
+currently active rules**. A typo in an edit can never silence a running monitor.
+A successful reload logs the new rule count:
+
+```
+séance: SIGHUP reload — loaded 18 rules from signatures/default.toml
+```
+
 ---
 
 ## State
@@ -199,7 +233,8 @@ séance persists a small state file under `.seance/` (configurable with
   conditional requests resume. One extra API call, no correctness impact.
 
 On first run séance starts fresh. On SIGINT/SIGTERM it flushes state and
-exits 0. Deleting `.seance/` resets state completely.
+exits 0. On SIGHUP it hot-reloads the signatures file without exiting (see
+[Hot-reload](#hot-reload-sighup)). Deleting `.seance/` resets state completely.
 
 ---
 

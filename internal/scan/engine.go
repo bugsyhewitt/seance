@@ -5,6 +5,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
 	"github.com/bugsyhewitt/seance/internal/output"
@@ -21,14 +22,39 @@ const baseConfidence = 0.80
 const highSpecificityBonus = 0.10
 
 // Engine runs detection rules over fetched file content.
+//
+// The rule set is guarded by rulesMu so it can be swapped at runtime
+// (see ReloadRules) by a signal handler while Scan runs concurrently in
+// the pipeline loop. Sinks are fixed for the life of the engine and need
+// no locking.
 type Engine struct {
-	rules []ruleset.Rule
-	sinks []output.Sink
+	rulesMu sync.RWMutex
+	rules   []ruleset.Rule
+	sinks   []output.Sink
 }
 
 // New constructs an Engine with the given rules and output sinks.
 func New(rules []ruleset.Rule, sinks ...output.Sink) *Engine {
 	return &Engine{rules: rules, sinks: sinks}
+}
+
+// ReloadRules atomically replaces the engine's active rule set. It is safe to
+// call concurrently with Scan: an in-flight Scan completes against the snapshot
+// it took, and the next Scan picks up the new rules. Passing an empty slice
+// disables all detection until the next reload — callers should validate the
+// new rule set is non-empty before reloading if that is undesirable.
+func (e *Engine) ReloadRules(rules []ruleset.Rule) {
+	e.rulesMu.Lock()
+	e.rules = rules
+	e.rulesMu.Unlock()
+}
+
+// RuleCount returns the number of rules currently active. Primarily useful for
+// observability and tests after a ReloadRules.
+func (e *Engine) RuleCount() int {
+	e.rulesMu.RLock()
+	defer e.rulesMu.RUnlock()
+	return len(e.rules)
 }
 
 // Scan runs all rules against content and emits Findings to all sinks.
@@ -37,8 +63,16 @@ func (e *Engine) Scan(ctx context.Context, content fetch.FileContent) (int, erro
 	if content.Skipped {
 		return 0, nil
 	}
+	// Snapshot the rule set under a read lock so a concurrent ReloadRules
+	// (triggered by SIGHUP) cannot mutate the slice mid-iteration. The slice
+	// header is copied; the backing array is never mutated in place — reloads
+	// install a brand-new slice — so the snapshot stays valid for this scan.
+	e.rulesMu.RLock()
+	rules := e.rules
+	e.rulesMu.RUnlock()
+
 	total := 0
-	for _, rule := range e.rules {
+	for _, rule := range rules {
 		if !keywordMatch(content.Patch, rule.Keywords) {
 			continue
 		}
