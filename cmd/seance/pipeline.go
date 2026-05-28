@@ -17,6 +17,7 @@ import (
 	ghprovider "github.com/bugsyhewitt/seance/internal/ingestion/github"
 	"github.com/bugsyhewitt/seance/internal/output"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
+	"github.com/bugsyhewitt/seance/internal/output/tui"
 	"github.com/bugsyhewitt/seance/internal/output/webhook"
 	"github.com/bugsyhewitt/seance/internal/prefilter"
 	"github.com/bugsyhewitt/seance/internal/scan"
@@ -55,9 +56,14 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		_ = store.Save(st)
 	}()
 
-	// stdout NDJSON is always the primary sink. Additional sinks fan out from
-	// the same Scan via the variadic engine constructor.
-	sinks := []output.Sink{ndjson.New(os.Stdout)}
+	// The primary stdout sink is either the live TUI feed (--tui on an interactive
+	// terminal) or the raw NDJSON stream. --tui degrades to NDJSON automatically
+	// when stdout is not a TTY (a pipe, a file, CI) so a redirected stream is never
+	// corrupted by escape sequences. Either way it is just one output.Sink; the
+	// scan/dedup/alerting data path is identical. Additional sinks (webhook) fan
+	// out from the same Scan via the variadic engine constructor.
+	primary := primaryStdoutSink(c)
+	sinks := []output.Sink{primary}
 
 	// Optional webhook alerting sink. Constructed only when a URL is configured.
 	// Its Close (drain + flush) runs after the stdout sink's, both via defers.
@@ -315,6 +321,24 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			return nil
 		}
 	}
+}
+
+// primaryStdoutSink chooses séance's primary stdout output sink. When --tui is
+// set AND stdout is an interactive terminal, it returns the live TUI feed;
+// otherwise (no --tui, or stdout redirected to a pipe/file/CI) it returns the
+// raw NDJSON sink. This is the graceful-degradation contract: --tui on a
+// non-TTY silently becomes NDJSON so downstream consumers are never corrupted by
+// terminal escape sequences. The choice changes only presentation — the scan,
+// dedup, and alerting path is identical for both.
+func primaryStdoutSink(c config.Config) output.Sink {
+	if c.TUI && tui.IsTTY(os.Stdout) {
+		fmt.Fprintf(os.Stderr, "séance: live terminal feed enabled (--tui)\n")
+		return tui.New(tui.Config{Writer: os.Stdout, TTY: true})
+	}
+	if c.TUI {
+		fmt.Fprintf(os.Stderr, "séance: --tui ignored — stdout is not a terminal; falling back to NDJSON\n")
+	}
+	return ndjson.New(os.Stdout)
 }
 
 // parseWebhookHeaders converts repeated "KEY:VALUE" flag strings into a header

@@ -39,6 +39,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.WebhookURL, "webhook-url", cfg.WebhookURL, "POST each finding (redacted) as JSON to this URL; empty disables the webhook sink")
 	rootCmd.PersistentFlags().StringArrayVar(&cfg.WebhookHeaders, "webhook-header", cfg.WebhookHeaders, "header added to every webhook POST as KEY:VALUE (repeatable, e.g. Authorization:Bearer xyz)")
 	rootCmd.PersistentFlags().Float64Var(&cfg.WebhookMinConfidence, "webhook-min-confidence", cfg.WebhookMinConfidence, "only POST findings with confidence at or above this threshold (0.0-1.0)")
+	rootCmd.PersistentFlags().BoolVar(&cfg.TUI, "tui", cfg.TUI, "render a live, confidence-colored terminal feed of findings instead of raw NDJSON on stdout; falls back to NDJSON automatically when stdout is not a TTY")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
