@@ -165,10 +165,10 @@ func TestEngine_EntropyFilter_DropLow(t *testing.T) {
 func TestEngine_EntropyFilter_KeepHigh(t *testing.T) {
 	rules := []ruleset.Rule{
 		{
-			ID:      "generic-secret",
-			Regex:   `(?i)secret\s*=\s*['"]?([A-Za-z0-9/+=]{32,64})['"]?`,
+			ID:       "generic-secret",
+			Regex:    `(?i)secret\s*=\s*['"]?([A-Za-z0-9/+=]{32,64})['"]?`,
 			Keywords: []string{"secret"},
-			Entropy: 3.5,
+			Entropy:  3.5,
 		},
 	}
 	var findings []output.Finding
@@ -191,10 +191,10 @@ func TestEngine_EntropyFilter_KeepHigh(t *testing.T) {
 func TestEngine_EntropyDisabled(t *testing.T) {
 	rules := []ruleset.Rule{
 		{
-			ID:      "no-entropy-rule",
-			Regex:   `AKIA[A-Z0-9]{16}`,
+			ID:       "no-entropy-rule",
+			Regex:    `AKIA[A-Z0-9]{16}`,
 			Keywords: []string{"AKIA"},
-			Entropy: 0, // disabled
+			Entropy:  0, // disabled
 		},
 	}
 	var findings []output.Finding
@@ -399,6 +399,164 @@ func TestEngine_ReloadRules_ConcurrentWithScan(t *testing.T) {
 	wg.Wait()
 	// No assertion on findings count (it depends on interleaving); the test
 	// passes if -race reports no data race and nothing panics.
+}
+
+// ── Cross-run finding suppression (POST_V01 Item 4) ─────────────────────────────
+
+// memSuppressor is an in-memory scan.Suppressor for engine tests: it suppresses
+// any fingerprint in its always-ignore set or already recorded as seen.
+type memSuppressor struct {
+	always map[string]bool // operator suppress-list analogue
+	seen   map[string]bool // recorded via MarkSeen
+}
+
+func newMemSuppressor(always ...string) *memSuppressor {
+	m := &memSuppressor{always: map[string]bool{}, seen: map[string]bool{}}
+	for _, fp := range always {
+		m.always[fp] = true
+	}
+	return m
+}
+
+func (m *memSuppressor) Suppress(fp string) bool { return m.always[fp] || m.seen[fp] }
+func (m *memSuppressor) MarkSeen(fp string)      { m.seen[fp] = true }
+
+func awsRule() []ruleset.Rule {
+	return []ruleset.Rule{{
+		ID:       "aws-access-key-id",
+		Regex:    `AKIA[A-Z0-9]{16}`,
+		Keywords: []string{"AKIA"},
+	}}
+}
+
+// TestEngine_Suppressor_DuplicateSuppressed verifies that the second scan of an
+// identical finding is dropped (not emitted) and counted, while the first passes.
+func TestEngine_Suppressor_DuplicateSuppressed(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRule(), &captureSink{findings: &findings}).
+		WithSuppressor(newMemSuppressor())
+
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	content := newContent(line, []string{line})
+
+	// First sighting: emitted.
+	n1, err := engine.Scan(context.Background(), content)
+	if err != nil {
+		t.Fatalf("scan 1: %v", err)
+	}
+	if n1 != 1 {
+		t.Fatalf("first scan should emit 1 finding, got %d", n1)
+	}
+	// Second sighting of the same secret in the same repo+file: suppressed.
+	n2, err := engine.Scan(context.Background(), content)
+	if err != nil {
+		t.Fatalf("scan 2: %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("re-detected finding should be suppressed, got %d emitted", n2)
+	}
+	if len(findings) != 1 {
+		t.Errorf("sink should have received exactly 1 finding, got %d", len(findings))
+	}
+	if got := engine.SuppressedCount(); got != 1 {
+		t.Errorf("findings_suppressed_total: got %d, want 1", got)
+	}
+}
+
+// TestEngine_Suppressor_DistinctNotSuppressed verifies that a genuinely
+// different finding (different repo) is not suppressed by a prior one.
+func TestEngine_Suppressor_DistinctNotSuppressed(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRule(), &captureSink{findings: &findings}).
+		WithSuppressor(newMemSuppressor())
+
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+
+	c1 := newContent(line, []string{line}) // repo "alice/repo" via newContent default
+	c2 := newContent(line, []string{line})
+	c2.Event.RepoOwner = "bob" // distinct location → distinct fingerprint
+
+	n1, _ := engine.Scan(context.Background(), c1)
+	n2, _ := engine.Scan(context.Background(), c2)
+	if n1 != 1 || n2 != 1 {
+		t.Errorf("distinct findings should both emit: got n1=%d n2=%d", n1, n2)
+	}
+	if engine.SuppressedCount() != 0 {
+		t.Errorf("no finding should have been suppressed, got %d", engine.SuppressedCount())
+	}
+}
+
+// TestEngine_Suppressor_SuppressListHonored verifies that a finding whose
+// fingerprint is on the operator suppress-list is dropped on the very first
+// sighting (never alerted), and counted.
+func TestEngine_Suppressor_SuppressListHonored(t *testing.T) {
+	// First, learn the fingerprint the engine will compute for this finding by
+	// scanning once with no suppressor and reading it back from the sink.
+	var probe []output.Finding
+	probeEngine := scan.New(awsRule(), &captureSink{findings: &probe})
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	if _, err := probeEngine.Scan(context.Background(), newContent(line, []string{line})); err != nil {
+		t.Fatalf("probe scan: %v", err)
+	}
+	if len(probe) != 1 || probe[0].Fingerprint == "" {
+		t.Fatalf("probe should yield 1 finding with a fingerprint, got %+v", probe)
+	}
+	fp := probe[0].Fingerprint
+
+	// Now scan with that fingerprint on the always-ignore list.
+	var findings []output.Finding
+	engine := scan.New(awsRule(), &captureSink{findings: &findings}).
+		WithSuppressor(newMemSuppressor(fp))
+
+	n, err := engine.Scan(context.Background(), newContent(line, []string{line}))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if n != 0 || len(findings) != 0 {
+		t.Errorf("suppress-listed finding must never reach a sink: n=%d sink=%d", n, len(findings))
+	}
+	if engine.SuppressedCount() != 1 {
+		t.Errorf("findings_suppressed_total: got %d, want 1", engine.SuppressedCount())
+	}
+}
+
+// TestEngine_Fingerprint_StampedOnFinding verifies that every emitted finding
+// carries a non-empty fingerprint matching scan.Fingerprint, so operators can
+// copy it straight into a suppress-file.
+func TestEngine_Fingerprint_StampedOnFinding(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRule(), &captureSink{findings: &findings})
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	if _, err := engine.Scan(context.Background(), newContent(line, []string{line})); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	got := findings[0].Fingerprint
+	if got == "" {
+		t.Fatal("emitted finding must carry a fingerprint")
+	}
+	if want := scan.Fingerprint(findings[0]); got != want {
+		t.Errorf("stamped fingerprint %q must equal scan.Fingerprint %q", got, want)
+	}
+}
+
+// TestEngine_NoSuppressor_EmitsEverything confirms backward compatibility: with
+// no suppressor installed, duplicate scans both emit (legacy behaviour).
+func TestEngine_NoSuppressor_EmitsEverything(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRule(), &captureSink{findings: &findings})
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	content := newContent(line, []string{line})
+	n1, _ := engine.Scan(context.Background(), content)
+	n2, _ := engine.Scan(context.Background(), content)
+	if n1 != 1 || n2 != 1 {
+		t.Errorf("without a suppressor every scan emits: got n1=%d n2=%d", n1, n2)
+	}
+	if engine.SuppressedCount() != 0 {
+		t.Errorf("no suppressor means zero suppressed, got %d", engine.SuppressedCount())
+	}
 }
 
 // TestEngine_Confidence_Bounded verifies that confidence never exceeds 1.0.

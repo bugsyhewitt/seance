@@ -2,6 +2,7 @@ package state_test
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,4 +147,144 @@ func TestState_Evict_Persisted(t *testing.T) {
 	if !reloaded.Seen("fresh") {
 		t.Error("surviving entry must persist across reload")
 	}
+}
+
+// ── Cross-run finding deduplication (POST_V01 Item 4) ───────────────────────────
+
+// TestState_SeenFinding_MarkAndCheck covers the basic seen-set semantics for
+// finding fingerprints, including lazy map initialisation on a zero-value State
+// (as produced by unmarshalling an older state file that predates the field).
+func TestState_SeenFinding_MarkAndCheck(t *testing.T) {
+	var s state.State // zero value: SeenFindings is nil
+	if s.SeenFinding("sha256:abcd") {
+		t.Error("nil seen-findings map must read as unseen")
+	}
+	s.MarkFinding("sha256:abcd")
+	if !s.SeenFinding("sha256:abcd") {
+		t.Error("fingerprint should be seen after MarkFinding")
+	}
+	if s.SeenFinding("sha256:ef01") {
+		t.Error("a different fingerprint must remain unseen")
+	}
+}
+
+// TestState_New_InitialisesSeenFindings ensures New() returns a ready-to-use
+// finding seen-set so callers never hit a nil map on a fresh run.
+func TestState_New_InitialisesSeenFindings(t *testing.T) {
+	s := state.New()
+	if s.SeenFindings == nil {
+		t.Fatal("New(): SeenFindings must be initialised")
+	}
+}
+
+// TestState_Evict_TrimsSeenFindings proves the shared eviction window bounds the
+// finding seen-set the same way it bounds SeenCommits: stale fingerprints are
+// dropped, fresh ones survive.
+func TestState_Evict_TrimsSeenFindings(t *testing.T) {
+	s := state.New()
+	s.SeenFindings["stale"] = time.Now().Add(-9 * 24 * time.Hour)
+	s.SeenFindings["fresh"] = time.Now()
+
+	s.Evict(7 * 24 * time.Hour)
+
+	if s.SeenFinding("stale") {
+		t.Error("finding fingerprint older than TTL should be evicted")
+	}
+	if !s.SeenFinding("fresh") {
+		t.Error("finding fingerprint within TTL should survive eviction")
+	}
+}
+
+// TestState_SeenFindings_PersistAcrossRestart is the cross-run guarantee: a
+// fingerprint recorded in run 1 is still suppressed in run 2 after a save/load
+// cycle — the re-leak suppression the feature exists to provide.
+func TestState_SeenFindings_PersistAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	store := state.NewJSONFileStorage(filepath.Join(dir, "state.json"))
+
+	run1 := state.New()
+	run1.MarkFinding("sha256:deadbeef")
+	if err := store.Save(run1); err != nil {
+		t.Fatalf("save run1: %v", err)
+	}
+
+	run2, err := store.Load()
+	if err != nil {
+		t.Fatalf("load run2: %v", err)
+	}
+	if !run2.SeenFinding("sha256:deadbeef") {
+		t.Error("finding fingerprint from run 1 must be suppressed in run 2")
+	}
+	if run2.SeenFinding("sha256:cafef00d") {
+		t.Error("unseen fingerprint must not be suppressed after reload")
+	}
+}
+
+// ── FindingSuppressor ───────────────────────────────────────────────────────────
+
+// TestFindingSuppressor_ReLeakSuppressed verifies the core dedup loop: the first
+// time a fingerprint is seen it passes (Suppress=false), and after MarkSeen the
+// same fingerprint suppresses.
+func TestFindingSuppressor_ReLeakSuppressed(t *testing.T) {
+	var mu sync.Mutex
+	s := state.New()
+	sup := state.NewFindingSuppressor(&mu, s, nil)
+
+	const fp = "sha256:11111111"
+	if sup.Suppress(fp) {
+		t.Fatal("first sighting must not be suppressed")
+	}
+	sup.MarkSeen(fp)
+	if !sup.Suppress(fp) {
+		t.Error("a re-detected finding must be suppressed after MarkSeen")
+	}
+	if sup.Suppress("sha256:22222222") {
+		t.Error("a distinct finding must not be suppressed")
+	}
+}
+
+// TestFindingSuppressor_SuppressListHonored verifies that an operator
+// suppress-list entry is always suppressed and is never recorded as "seen", so
+// removing it from the list re-enables alerting.
+func TestFindingSuppressor_SuppressListHonored(t *testing.T) {
+	var mu sync.Mutex
+	s := state.New()
+	const listed = "sha256:abcdef01"
+	sup := state.NewFindingSuppressor(&mu, s, []string{listed, "", "  ignored-empty-handled "})
+
+	if !sup.Suppress(listed) {
+		t.Error("suppress-list fingerprint must be suppressed")
+	}
+	// Listed entries are never marked seen — the seen-set stays empty for them,
+	// so deleting the list entry re-enables alerting.
+	if s.SeenFinding(listed) {
+		t.Error("suppress-list entry must not be recorded in the seen-set")
+	}
+	if sup.Suppress("sha256:not-listed") {
+		t.Error("a fingerprint absent from list and seen-set must pass")
+	}
+}
+
+// TestFindingSuppressor_SharesStateMutex exercises the suppressor concurrently to
+// confirm (under -race) that all State access is serialised through the shared
+// mutex with no data race.
+func TestFindingSuppressor_SharesStateMutex(t *testing.T) {
+	var mu sync.Mutex
+	s := state.New()
+	sup := state.NewFindingSuppressor(&mu, s, nil)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			fp := "sha256:" + string(rune('a'+id%8))
+			for j := 0; j < 500; j++ {
+				if !sup.Suppress(fp) {
+					sup.MarkSeen(fp)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }

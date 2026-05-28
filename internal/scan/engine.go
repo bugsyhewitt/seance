@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
 	"github.com/bugsyhewitt/seance/internal/output"
@@ -31,11 +32,54 @@ type Engine struct {
 	rulesMu sync.RWMutex
 	rules   []ruleset.Rule
 	sinks   []output.Sink
+
+	// suppressor, when non-nil, decides whether a finding is a cross-run
+	// duplicate or an operator-suppressed false positive and should not be
+	// emitted to the sinks. It is fixed for the life of the engine.
+	suppressor Suppressor
+
+	// suppressed counts findings dropped by the suppressor. Read atomically for
+	// the findings_suppressed_total metric.
+	suppressed uint64
+}
+
+// Suppressor decides whether a finding should be suppressed (not emitted) on the
+// basis of its stable fingerprint. It is the consumer-side interface for
+// cross-run deduplication and operator suppress-lists; state.State implements it.
+//
+// Suppress is called once per candidate finding under the engine's care. It must
+// be safe for concurrent use — the pipeline scans on a single goroutine today,
+// but the engine makes no such guarantee. Implementations should do their own
+// locking. A return of true means "drop this finding"; the engine still records
+// the fingerprint as seen via MarkSeen so a later identical finding is also
+// dropped.
+type Suppressor interface {
+	// Suppress reports whether the finding with this fingerprint should be
+	// dropped — either because it was seen in a prior run/scan or because it is
+	// on an operator suppress-list.
+	Suppress(fingerprint string) bool
+	// MarkSeen records a fingerprint as emitted so subsequent identical findings
+	// suppress. Called only for findings that were NOT suppressed.
+	MarkSeen(fingerprint string)
 }
 
 // New constructs an Engine with the given rules and output sinks.
 func New(rules []ruleset.Rule, sinks ...output.Sink) *Engine {
 	return &Engine{rules: rules, sinks: sinks}
+}
+
+// WithSuppressor returns the engine with the given cross-run suppressor
+// installed. Passing nil disables suppression (every finding is emitted). It is
+// intended to be called once at construction, before Scan runs.
+func (e *Engine) WithSuppressor(s Suppressor) *Engine {
+	e.suppressor = s
+	return e
+}
+
+// SuppressedCount returns the cumulative number of findings dropped by the
+// suppressor. Used for the findings_suppressed_total metric.
+func (e *Engine) SuppressedCount() uint64 {
+	return atomic.LoadUint64(&e.suppressed)
 }
 
 // ReloadRules atomically replaces the engine's active rule set. It is safe to
@@ -126,6 +170,23 @@ func (e *Engine) Scan(ctx context.Context, content fetch.FileContent) (int, erro
 					Tags:       rule.Tags,
 					Timestamp:  content.Event.Timestamp,
 				}
+				// Stamp the stable fingerprint so it appears in every sink's
+				// output — operators copy it into a --suppress-file to silence a
+				// known false positive, and it is the cross-run dedup key.
+				finding.Fingerprint = Fingerprint(finding)
+
+				// Cross-run dedup / re-leak suppression: an alerting tool without
+				// dedup is a spam cannon. If the suppressor has seen this exact
+				// finding before (this run or a prior one) or it is on an operator
+				// suppress-list, count it and skip every sink — never re-alert.
+				if e.suppressor != nil {
+					if e.suppressor.Suppress(finding.Fingerprint) {
+						atomic.AddUint64(&e.suppressed, 1)
+						continue
+					}
+					e.suppressor.MarkSeen(finding.Fingerprint)
+				}
+
 				for _, sink := range e.sinks {
 					if err := sink.Emit(ctx, finding); err != nil {
 						return total, err

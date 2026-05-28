@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -82,6 +83,20 @@ func runPipeline(ctx context.Context, c config.Config) error {
 
 	engine := scan.New(rs.Rules, sinks...)
 
+	// Cross-run finding deduplication / re-leak suppression. The suppressor is
+	// backed by the persisted SeenFindings set (so a secret re-pushed or forked
+	// after a restart is alerted once, not every run) plus an optional operator
+	// suppress-list loaded from --suppress-file. It shares stMu with every other
+	// State reader so its bookkeeping cannot race eviction or the final persist.
+	suppressList, serr := loadSuppressFile(c.SuppressFile)
+	if serr != nil {
+		return fmt.Errorf("suppress file: %w", serr)
+	}
+	engine.WithSuppressor(state.NewFindingSuppressor(&stMu, st, suppressList))
+	if c.SuppressFile != "" {
+		fmt.Fprintf(os.Stderr, "séance: loaded %d suppress-list fingerprints from %s\n", len(suppressList), c.SuppressFile)
+	}
+
 	// SIGHUP hot-reloads the signatures file into the running engine without a
 	// restart — so a long-running monitor can pick up new rules while keeping its
 	// in-memory ETag, poll cadence, and seen-commit dedup set intact. A failed
@@ -146,7 +161,10 @@ func runPipeline(ctx context.Context, c config.Config) error {
 
 		stMu.Lock()
 		seenTracked := len(st.SeenCommits)
+		seenFindingsTracked := len(st.SeenFindings)
 		stMu.Unlock()
+
+		findingsSuppressed := engine.SuppressedCount()
 
 		var alertsSent, alertsFailed, alertsDropped uint64
 		if webhookSink != nil {
@@ -154,7 +172,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d seen_commits_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -163,7 +181,9 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			fetched,
 			provFetch,
 			findings,
+			findingsSuppressed,
 			seenTracked,
+			seenFindingsTracked,
 			alertsSent,
 			alertsFailed,
 			alertsDropped,
@@ -320,6 +340,37 @@ func parseWebhookHeaders(raw []string) (map[string]string, error) {
 		headers[key] = val
 	}
 	return headers, nil
+}
+
+// loadSuppressFile reads a newline-delimited list of finding fingerprints from
+// path (the .gitleaksignore analogue). Blank lines and lines whose first
+// non-space character is '#' are skipped; surrounding whitespace is trimmed off
+// each fingerprint. An empty path returns no entries and no error (the feature
+// is opt-in). A non-existent path is an error so a typo'd flag fails loudly
+// rather than silently disabling the operator's suppress-list.
+func loadSuppressFile(path string) ([]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var fps []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fps = append(fps, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return fps, nil
 }
 
 // reloadSignatures re-reads the signatures file at path and swaps the engine's
