@@ -6,6 +6,32 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**ETag persistence across restarts** (ingestion + state + pipeline)
+- The GitHub events ETag is now persisted to the state file and reloaded on
+  startup, closing a v0.1 known limitation ("ETag is not persisted across
+  restarts. The first poll after restart is a full fetch"). The `State.ETag`
+  field — declared and documented since v0.1 as enabling poll resume, but never
+  read or written by any code path — is now wired end to end (the same
+  shipped-but-dead-field correctness debt the roadmap weighted up for the seen
+  -commit eviction, finding-dedup, and output-file items).
+- The events provider gains `SeedETag` (prime the conditional cursor from
+  persisted state before `Stream`) and `CurrentETag` (read the live ETag back,
+  safe to call concurrently with the running poll loop). The internal ETag moved
+  from a poll-loop local to a mutex-guarded field.
+- `cmd/seance/pipeline.go` seeds the provider from `st.ETag` at startup and, in a
+  deferred flush ordered before the state save (LIFO), writes the freshest ETag
+  back to state. Result: the first poll after a restart is a cheap `If-None-Match`
+  conditional request (HTTP 304 when nothing new happened) instead of a full cold
+  fetch that re-pulls and re-prefilters the whole events page.
+- No correctness impact if the cursor expires server-side: GitHub simply returns
+  a fresh 200 page and a new ETag, and seen-commit dedup still prevents duplicate
+  findings. A 304 leaves the existing ETag intact so the cursor survives quiet
+  polls.
+- Tests: `internal/ingestion/github/provider_test.go` adds seeded-ETag-sent-as
+  -If-None-Match, CurrentETag-tracks-response, and 304-preserves-ETag cases;
+  ETag round-trip through the state file is already covered by
+  `internal/state/state_test.go` (`TestJSONFileStorage_RoundTrip`). `-race` clean.
+
 **Targeted / org-scoped Search-API monitoring (`--watch`)** (ingestion + pipeline) — POST_V01 Item 7
 - New `internal/ingestion/search` provider implementing `ingestion.Provider`:
   polls GitHub's commit Search API (`GET /search/commits`) for operator-supplied

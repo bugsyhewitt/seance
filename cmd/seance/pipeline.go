@@ -142,6 +142,25 @@ func runPipeline(ctx context.Context, c config.Config) error {
 
 	provider := ghprovider.NewWithBaseURL(c.GitHubToken, "https://api.github.com")
 	provider.DetectForcePush = c.ForcePush
+	// Resume conditional polling across restarts: seed the provider with the ETag
+	// persisted from the previous run so the first poll is an If-None-Match request
+	// (a cheap 304 when nothing new happened) instead of a full cold fetch. The
+	// live ETag is written back to state on shutdown in the deferred flush below.
+	provider.SeedETag(st.ETag)
+	if st.ETag != "" {
+		fmt.Fprintf(os.Stderr, "séance: resuming events poll from persisted ETag\n")
+	}
+	// Capture the provider's latest ETag into state before the final persist. This
+	// defer runs before the top-of-function save defer (LIFO), so the saved state
+	// carries the freshest conditional-request cursor. Guarded by stMu like every
+	// other state mutation so it cannot race the metrics/eviction goroutines.
+	defer func() {
+		if cur := provider.CurrentETag(); cur != "" {
+			stMu.Lock()
+			st.ETag = cur
+			stMu.Unlock()
+		}
+	}()
 	fetcher := fetch.NewGitHubFetcher(c.GitHubToken, "https://api.github.com")
 	if c.ForcePush {
 		fmt.Fprintf(os.Stderr, "séance: force-push detection enabled — orphaned diffs will be recovered via the compare API\n")

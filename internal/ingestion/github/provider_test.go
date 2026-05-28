@@ -200,6 +200,97 @@ func TestProvider_ForcePushDisabled(t *testing.T) {
 	}
 }
 
+// TestProvider_SeedETag_SentAsIfNoneMatch verifies that an ETag seeded from
+// persisted state is sent as the If-None-Match header on the first poll, so a
+// restart resumes conditional requests instead of doing a full cold fetch.
+func TestProvider_SeedETag_SentAsIfNoneMatch(t *testing.T) {
+	fixture, _ := os.ReadFile("testdata/events_page1.json")
+
+	gotIfNoneMatch := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotIfNoneMatch <- r.Header.Get("If-None-Match"):
+		default:
+		}
+		w.Header().Set("ETag", `"freshetag"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	p := ghprovider.NewWithBaseURL("", srv.URL)
+	p.SeedETag(`"persisted123"`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	events, _ := p.Stream(ctx)
+	for range events {
+	} // drain
+
+	select {
+	case got := <-gotIfNoneMatch:
+		if got != `"persisted123"` {
+			t.Errorf("first poll If-None-Match = %q, want the seeded ETag", got)
+		}
+	default:
+		t.Fatal("server never received a request")
+	}
+}
+
+// TestProvider_CurrentETag_TracksResponse verifies that CurrentETag returns the
+// latest ETag observed from the response, which the pipeline persists at shutdown.
+func TestProvider_CurrentETag_TracksResponse(t *testing.T) {
+	fixture, _ := os.ReadFile("testdata/events_page1.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"server-etag-xyz"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	p := ghprovider.NewWithBaseURL("", srv.URL)
+	if got := p.CurrentETag(); got != "" {
+		t.Errorf("CurrentETag before any poll = %q, want empty", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	events, _ := p.Stream(ctx)
+	for range events {
+	} // drain
+
+	if got := p.CurrentETag(); got != `"server-etag-xyz"` {
+		t.Errorf("CurrentETag after poll = %q, want the response ETag", got)
+	}
+}
+
+// TestProvider_NotModified_PreservesETag verifies that a 304 Not Modified
+// response (the steady state when nothing new happened) leaves the existing ETag
+// intact rather than clearing it, so the conditional cursor survives quiet polls.
+func TestProvider_NotModified_PreservesETag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Server always answers 304 with no body and no ETag header.
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	p := ghprovider.NewWithBaseURL("", srv.URL)
+	p.SeedETag(`"keep-me"`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	events, _ := p.Stream(ctx)
+	for range events {
+	} // drain (none expected)
+
+	if got := p.CurrentETag(); got != `"keep-me"` {
+		t.Errorf("CurrentETag after 304 = %q, want the seeded ETag preserved", got)
+	}
+}
+
 // TestProvider_AdaptiveCadence_BackoffAndRecovery verifies that:
 // (a) when X-RateLimit-Remaining is critically low, the provider backs off, and
 // (b) when it recovers on the next poll, normal cadence resumes (one-way backoff

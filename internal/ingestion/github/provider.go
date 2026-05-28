@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +61,17 @@ type Provider struct {
 	DetectForcePush bool
 	client          *http.Client
 	Metrics         Metrics
+
+	// etagMu guards etag, which is read by CurrentETag (e.g. the pipeline at
+	// shutdown, to persist the conditional-request cursor across restarts) while
+	// the poll loop is concurrently updating it after each fetch.
+	etagMu sync.Mutex
+	// etag is the last ETag returned by GET /events. It is sent as If-None-Match
+	// on the next poll so the server can answer 304 Not Modified when nothing new
+	// has happened, saving a full response body. Seeded from persisted state via
+	// SeedETag so a restart resumes conditional requests instead of doing a full
+	// cold fetch.
+	etag string
 }
 
 // New returns a GitHub provider. token may be empty for unauthenticated
@@ -88,6 +100,29 @@ func NewWithBaseURL(token, baseURL string) *Provider {
 // Name implements ingestion.Provider.
 func (p *Provider) Name() string { return "github" }
 
+// SeedETag primes the provider with an ETag persisted from a previous run so the
+// first poll after a restart is a conditional request (If-None-Match) rather than
+// a full cold fetch. A blank value is ignored (a fresh start still works). Call
+// before Stream.
+func (p *Provider) SeedETag(etag string) {
+	if etag == "" {
+		return
+	}
+	p.etagMu.Lock()
+	p.etag = etag
+	p.etagMu.Unlock()
+}
+
+// CurrentETag returns the most recent ETag observed from GET /events, or "" if no
+// poll has completed yet. It is safe to call concurrently with the running poll
+// loop — the pipeline reads it at shutdown to persist the conditional-request
+// cursor for the next run.
+func (p *Provider) CurrentETag() string {
+	p.etagMu.Lock()
+	defer p.etagMu.Unlock()
+	return p.etag
+}
+
 // Stream implements ingestion.Provider. Polls the GitHub events endpoint
 // at an adaptive interval driven by X-Poll-Interval and X-RateLimit-* headers.
 func (p *Provider) Stream(ctx context.Context) (<-chan ingestion.CommitEvent, <-chan error) {
@@ -102,13 +137,12 @@ func (p *Provider) Stream(ctx context.Context) (<-chan ingestion.CommitEvent, <-
 }
 
 func (p *Provider) poll(ctx context.Context, events chan<- ingestion.CommitEvent, errs chan<- error) {
-	var etag string
 	var inBackoff bool
 	ticker := time.NewTicker(time.Duration(p.pollInterval) * time.Second)
 	defer ticker.Stop()
 
 	for {
-		if err := p.fetch(ctx, &etag, events); err != nil {
+		if err := p.fetch(ctx, events); err != nil {
 			select {
 			case errs <- err:
 			default:
@@ -142,7 +176,7 @@ func (p *Provider) poll(ctx context.Context, events chan<- ingestion.CommitEvent
 	}
 }
 
-func (p *Provider) fetch(ctx context.Context, etag *string, events chan<- ingestion.CommitEvent) error {
+func (p *Provider) fetch(ctx context.Context, events chan<- ingestion.CommitEvent) error {
 	url := p.baseURL + eventsPath
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -153,8 +187,8 @@ func (p *Provider) fetch(ctx context.Context, etag *string, events chan<- ingest
 	if p.token != "" {
 		req.Header.Set("Authorization", "Bearer "+p.token)
 	}
-	if *etag != "" {
-		req.Header.Set("If-None-Match", *etag)
+	if cur := p.CurrentETag(); cur != "" {
+		req.Header.Set("If-None-Match", cur)
 	}
 
 	atomic.AddUint64(&p.Metrics.FetchRequests, 1)
@@ -186,7 +220,9 @@ func (p *Provider) fetch(ctx context.Context, etag *string, events chan<- ingest
 	}
 
 	if newETag := resp.Header.Get("ETag"); newETag != "" {
-		*etag = newETag
+		p.etagMu.Lock()
+		p.etag = newETag
+		p.etagMu.Unlock()
 	}
 
 	var rawEvents []struct {

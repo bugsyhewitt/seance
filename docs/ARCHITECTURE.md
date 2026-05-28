@@ -179,8 +179,11 @@ On clean shutdown (SIGINT / SIGTERM), séance:
 On restart:
 - `SeenCommits` is reloaded — commits already processed are skipped and
   produce no duplicate findings.
-- ETag is empty — the first poll is a full fetch (HTTP 200). This consumes
-  one extra rate-limit slot but does not cause duplicate findings.
+- The persisted ETag is reloaded and seeded into the events provider, so the
+  first poll after a restart is a conditional request (`If-None-Match`). When
+  nothing new happened it answers HTTP 304 (no body, no extra page to
+  prefilter); when the cursor has expired server-side GitHub returns a fresh
+  page and ETag. Either way there are no duplicate findings.
 - Subsequent polls within the new process use conditional requests as normal.
 
 Verified by `TestRestartDeduplication` in `internal/state/state_test.go`.
