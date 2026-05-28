@@ -6,6 +6,28 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Pluggable webhook alerting sink** (output + pipeline)
+- New `internal/output/webhook` package implementing `output.Sink`: POSTs each
+  finding as JSON to a configured URL with optional headers, so findings reach a
+  human channel (relay, SIEM, chat bridge) in real time — séance is no longer a
+  pipe you have to babysit. The second `Sink` implementation, fanning out from
+  the same `Scan` as the existing stdout NDJSON sink.
+- Non-blocking by construction: findings are handed to a bounded in-memory queue
+  drained by a background worker, so a slow or dead endpoint never applies
+  backpressure to the scanner. On overflow, findings are dropped and counted.
+- Fail-open: a non-2xx response or transport error is logged to stderr and the
+  run continues; a dead alerting channel never takes down the monitor.
+- The POST body is the already-redacted `Finding` — the never-emit-raw-secrets
+  invariant holds for the webhook for free (`Finding` has no raw field).
+- New flags: `--webhook-url`, `--webhook-header KEY:VALUE` (repeatable),
+  `--webhook-min-confidence` (gates alerting against the R1 confidence score).
+- New metrics on the stderr line: `alerts_sent_total`, `alerts_failed_total`,
+  `alerts_dropped_total`.
+- Tests: `internal/output/webhook/sink_test.go` uses `httptest.Server` to assert
+  POST body/shape, Authorization header, min-confidence gating, no-raw-leak,
+  non-blocking behavior on 5xx and on a dead endpoint, queue-overflow drop, and
+  idempotent Close (`-race` clean).
+
 **Signature hot-reload via SIGHUP** (pipeline + scan engine)
 - Sending `SIGHUP` to a running séance re-reads the `--signatures` file and
   swaps the active rule set atomically — no restart, no lost ETag, no reset of

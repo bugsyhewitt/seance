@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -13,7 +14,9 @@ import (
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
 	ghprovider "github.com/bugsyhewitt/seance/internal/ingestion/github"
+	"github.com/bugsyhewitt/seance/internal/output"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
+	"github.com/bugsyhewitt/seance/internal/output/webhook"
 	"github.com/bugsyhewitt/seance/internal/prefilter"
 	"github.com/bugsyhewitt/seance/internal/scan"
 	"github.com/bugsyhewitt/seance/internal/scan/ruleset"
@@ -51,10 +54,33 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		_ = store.Save(st)
 	}()
 
-	sink := ndjson.New(os.Stdout)
-	defer sink.Close()
+	// stdout NDJSON is always the primary sink. Additional sinks fan out from
+	// the same Scan via the variadic engine constructor.
+	sinks := []output.Sink{ndjson.New(os.Stdout)}
 
-	engine := scan.New(rs.Rules, sink)
+	// Optional webhook alerting sink. Constructed only when a URL is configured.
+	// Its Close (drain + flush) runs after the stdout sink's, both via defers.
+	var webhookSink *webhook.Sink
+	if c.WebhookURL != "" {
+		headers, herr := parseWebhookHeaders(c.WebhookHeaders)
+		if herr != nil {
+			return fmt.Errorf("webhook header: %w", herr)
+		}
+		webhookSink = webhook.New(webhook.Config{
+			URL:           c.WebhookURL,
+			Headers:       headers,
+			MinConfidence: c.WebhookMinConfidence,
+			ErrLog:        os.Stderr,
+		})
+		sinks = append(sinks, webhookSink)
+		fmt.Fprintf(os.Stderr, "séance: webhook alerting enabled — POSTing findings (confidence >= %.2f) to %s\n",
+			c.WebhookMinConfidence, c.WebhookURL)
+	}
+	for _, s := range sinks {
+		defer s.Close()
+	}
+
+	engine := scan.New(rs.Rules, sinks...)
 
 	// SIGHUP hot-reloads the signatures file into the running engine without a
 	// restart — so a long-running monitor can pick up new rules while keeping its
@@ -122,8 +148,13 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		seenTracked := len(st.SeenCommits)
 		stMu.Unlock()
 
+		var alertsSent, alertsFailed, alertsDropped uint64
+		if webhookSink != nil {
+			alertsSent, alertsFailed, alertsDropped = webhookSink.Stats()
+		}
+
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d seen_commits_tracked=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d seen_commits_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -133,6 +164,9 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			provFetch,
 			findings,
 			seenTracked,
+			alertsSent,
+			alertsFailed,
+			alertsDropped,
 			float64(provPush)/elapsed,
 			survivalPct,
 			float64(fetched)/elapsed,
@@ -261,6 +295,31 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			return nil
 		}
 	}
+}
+
+// parseWebhookHeaders converts repeated "KEY:VALUE" flag strings into a header
+// map. The value may itself contain colons (e.g. a URL or a "Bearer x:y" token),
+// so only the first colon is treated as the separator. Whitespace around the key
+// is trimmed; the value is preserved verbatim after the separator. An entry with
+// no colon, or an empty key, is rejected.
+func parseWebhookHeaders(raw []string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	headers := make(map[string]string, len(raw))
+	for _, h := range raw {
+		idx := strings.Index(h, ":")
+		if idx < 0 {
+			return nil, fmt.Errorf("invalid header %q: expected KEY:VALUE", h)
+		}
+		key := strings.TrimSpace(h[:idx])
+		val := h[idx+1:]
+		if key == "" {
+			return nil, fmt.Errorf("invalid header %q: empty key", h)
+		}
+		headers[key] = val
+	}
+	return headers, nil
 }
 
 // reloadSignatures re-reads the signatures file at path and swaps the engine's
