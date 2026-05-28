@@ -1,0 +1,57 @@
+{
+  "total_count": 3,
+  "incomplete_results": false,
+  "items": [
+    {
+      "sha": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+      "commit": {
+        "message": "add acme-corp deploy script",
+        "author": {
+          "name": "Dana Dev",
+          "email": "dana@example.com",
+          "date": "2026-05-20T12:00:00Z"
+        }
+      },
+      "repository": {
+        "name": "infra",
+        "owner": {
+          "login": "acme-corp"
+        }
+      }
+    },
+    {
+      "sha": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+      "commit": {
+        "message": "wip acme-corp config",
+        "author": {
+          "name": "Sam Staff",
+          "email": "sam@example.com",
+          "date": "2026-05-19T09:30:00Z"
+        }
+      },
+      "repository": {
+        "name": "personal-notes",
+        "owner": {
+          "login": "samstaff"
+        }
+      }
+    },
+    {
+      "sha": "",
+      "commit": {
+        "message": "malformed result with empty sha — must be skipped",
+        "author": {
+          "name": "Nobody",
+          "email": "nobody@example.com",
+          "date": "2026-05-18T00:00:00Z"
+        }
+      },
+      "repository": {
+        "name": "",
+        "owner": {
+          "login": ""
+        }
+      }
+    }
+  ]
+}

@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
+	"github.com/bugsyhewitt/seance/internal/ingestion"
 	ghprovider "github.com/bugsyhewitt/seance/internal/ingestion/github"
+	searchprovider "github.com/bugsyhewitt/seance/internal/ingestion/search"
 	"github.com/bugsyhewitt/seance/internal/output"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	"github.com/bugsyhewitt/seance/internal/output/tui"
@@ -129,6 +131,22 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		fmt.Fprintf(os.Stderr, "séance: force-push detection enabled — orphaned diffs will be recovered via the compare API\n")
 	}
 
+	// Optional targeted/org-scoped Search-API provider. Constructed only when
+	// --watch keywords are supplied. It runs concurrently with the global events
+	// stream and fans its CommitEvents into the same downstream pipeline. The
+	// Search API has its own (much stricter) quota, so it governs its own cadence.
+	// When no keywords are configured the search provider is absent entirely and
+	// the events-only path is byte-for-byte unchanged.
+	var searchProv *searchprovider.Provider
+	if len(c.Watch) > 0 {
+		searchProv = searchprovider.NewWithBaseURL(c.GitHubToken, "https://api.github.com", c.Watch...)
+		if kw := searchProv.Keywords(); len(kw) > 0 {
+			fmt.Fprintf(os.Stderr, "séance: search-api monitoring enabled — watching %d keyword(s) via GET /search/commits\n", len(kw))
+		} else {
+			searchProv = nil // every keyword was blank
+		}
+	}
+
 	// Cumulative counters — all updated atomically.
 	var (
 		preFilterIn   uint64 // commits reaching pre-filter
@@ -177,8 +195,18 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			alertsSent, alertsFailed, alertsDropped = webhookSink.Stats()
 		}
 
+		// Search-API provider counters (zero when --watch is not configured).
+		var searchReqs, searchResults, searchEmitted uint64
+		searchRL := int64(-1)
+		if searchProv != nil {
+			searchReqs = atomic.LoadUint64(&searchProv.Metrics.SearchRequests)
+			searchResults = atomic.LoadUint64(&searchProv.Metrics.ResultsReceived)
+			searchEmitted = atomic.LoadUint64(&searchProv.Metrics.CommitsEmitted)
+			searchRL = atomic.LoadInt64(&searchProv.Metrics.RateLimitRemaining)
+		}
+
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -193,6 +221,10 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			alertsSent,
 			alertsFailed,
 			alertsDropped,
+			searchReqs,
+			searchResults,
+			searchEmitted,
+			searchRL,
 			float64(provPush)/elapsed,
 			survivalPct,
 			float64(fetched)/elapsed,
@@ -238,7 +270,15 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 	}()
 
-	events, errs := provider.Stream(ctx)
+	// Fan all configured providers into a single event/error stream. With only the
+	// events provider this is a passthrough; with --watch the search provider's
+	// stream is merged in, so the scan/dedup/fetch loop below is identical in both
+	// cases — multi-provider support is purely additive at the ingestion edge.
+	providers := []ingestion.Provider{provider}
+	if searchProv != nil {
+		providers = append(providers, searchProv)
+	}
+	events, errs := mergeProviders(ctx, providers...)
 	for {
 		select {
 		case event, ok := <-events:
@@ -321,6 +361,59 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			return nil
 		}
 	}
+}
+
+// mergeProviders starts every provider's Stream and fans their CommitEvents into
+// a single channel, and their errors into a single error channel. The merged
+// events channel is closed only after every provider's own events channel has
+// closed (each closes on ctx cancellation or an unrecoverable error), so the
+// downstream loop sees the same "channel closed ⇒ shutdown" contract it had with
+// a single provider. The first error from any provider is forwarded once; the
+// error channel is buffered so a provider failing never blocks. Both returned
+// channels are always closed when all providers have exited.
+func mergeProviders(ctx context.Context, providers ...ingestion.Provider) (<-chan ingestion.CommitEvent, <-chan error) {
+	out := make(chan ingestion.CommitEvent, 128)
+	errs := make(chan error, 1)
+
+	var wg sync.WaitGroup
+	for _, p := range providers {
+		evCh, erCh := p.Stream(ctx)
+		wg.Add(2)
+		// Forward events.
+		go func(ev <-chan ingestion.CommitEvent) {
+			defer wg.Done()
+			for e := range ev {
+				select {
+				case out <- e:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(evCh)
+		// Forward the (at most one) error, non-blocking — first writer wins.
+		// Counted in the WaitGroup so errs is not closed while a forwarder is
+		// still draining a provider's error channel.
+		go func(er <-chan error) {
+			defer wg.Done()
+			for e := range er {
+				if e == nil {
+					continue
+				}
+				select {
+				case errs <- e:
+				default:
+				}
+			}
+		}(erCh)
+	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+		close(errs)
+	}()
+
+	return out, errs
 }
 
 // primaryStdoutSink chooses séance's primary stdout output sink. When --tui is

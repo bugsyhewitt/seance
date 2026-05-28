@@ -22,6 +22,7 @@ Part of the graveyard toolkit alongside
 | Does | Doesn't |
 |------|---------|
 | Watch the GitHub public events API for new pushes | Access private repositories |
+| Optionally monitor the GitHub commit Search API for your keywords/orgs (`--watch`) | Access private repositories |
 | Recover and scan secrets buried by a force-push (history rewrite) | Store or log raw secret values — findings are always redacted |
 | Surface file paths and commits containing leaked credentials | Store or log raw secret values — findings are always redacted |
 | Apply a pluggable, gitleaks-compatible signature ruleset | Verify credentials against their provider APIs |
@@ -80,6 +81,45 @@ prior tip.
 
 ---
 
+## Targeted / org-scoped monitoring (`--watch`)
+
+The global events stream is a *firehose of fresh pushes* — it is bounded by the
+events endpoint's pagination depth and only sees what was pushed while séance was
+listening. It misses leaks that already sit **indexed** in repos pushed before
+séance started, in forks, and in commits whose push event scrolled off the
+window. `--watch` adds a complementary coverage axis built on GitHub's commit
+Search API:
+
+```bash
+# Watch your org name and an internal hostname (repeatable).
+seance --watch acme-corp --watch internal.example.com
+```
+
+Each keyword is polled via `GET /search/commits`; matching commits flow into the
+**same** pipeline as the events stream — prefilter, fetch, scan, dedup, redaction,
+and every sink (NDJSON / TUI / webhook) are reused unchanged. Findings from this
+provider carry `"provider": "search"` so you can tell the two coverage axes apart
+downstream.
+
+The Search API has its **own, much stricter quota** (30 requests/minute
+authenticated; 10/minute unauthenticated) that is separate from the core 5,000
+req/hr budget. séance's search provider governs its own cadence against that
+ceiling — it polls conservatively (~90s sweeps) and backs off automatically when
+`X-RateLimit-Remaining` runs low, recovering the moment the window resets. The
+events stream is unaffected by this; the two providers run concurrently and
+independently.
+
+`--watch` is **off by default** — with no keywords the search provider is absent
+entirely and the events-only path is unchanged. The
+`search_requests_total`, `search_results_total`, `search_commits_total`, and
+`search_rate_limit_remaining` metrics report its activity on the stderr metrics
+line.
+
+> A token is strongly recommended with `--watch`: the unauthenticated Search API
+> quota (10 req/min) is barely usable for more than one keyword.
+
+---
+
 ## Install
 
 **Binary** (recommended): download the pre-built binary for your platform from the
@@ -131,6 +171,10 @@ kill -HUP $(pgrep -f '^seance')
 
 # Disable force-push (history-rewrite) recovery
 seance --force-push=false
+
+# Targeted/org-scoped monitoring: ALSO poll the commit Search API for your
+# keywords (repeatable). Runs alongside the global events stream.
+seance --watch acme-corp --watch internal.example.com
 
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'

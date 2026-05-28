@@ -9,6 +9,17 @@ type Config struct {
 	GitHubToken     string `yaml:"github_token"`
 	PollIntervalSec int    `yaml:"poll_interval_sec"`
 
+	// Watch is an optional list of keywords for the targeted/org-scoped Search-API
+	// ingestion provider (the gitGraber-style coverage axis). When non-empty,
+	// séance ALSO polls GitHub's commit Search API for these keywords — e.g.
+	// "acme-corp" or "internal.example.com" — and fans the results into the same
+	// pipeline as the global events stream. This catches leaks the events firehose
+	// misses (indexed files, repos pushed before séance started, forks). The
+	// Search API has its own much stricter quota (30 req/min authenticated), so
+	// the search provider governs its own cadence independently of the events
+	// poller. Empty disables the search provider; the events stream is always on.
+	Watch []string `yaml:"watch"`
+
 	// Pre-filter
 	MaxFilesPerCommit int `yaml:"max_files_per_commit"`
 
