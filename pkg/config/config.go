@@ -20,6 +20,19 @@ type Config struct {
 	// poller. Empty disables the search provider; the events stream is always on.
 	Watch []string `yaml:"watch"`
 
+	// WatchSince and WatchUntil optionally scope the Search-API provider to a
+	// committer-date window (calendar dates, YYYY-MM-DD). They apply ONLY to the
+	// --watch search provider — the global events stream is inherently "now" and
+	// has no indexed history to scope. Either bound may be set independently:
+	// WatchSince alone means "commits on or after this date", WatchUntil alone
+	// means "on or before", both together an inclusive range. The window is
+	// rendered into a GitHub committer-date: search qualifier, so the index does
+	// the filtering at zero extra request cost. Empty leaves the search corpus
+	// unscoped (the prior behavior). Useful to suppress ancient indexed commits
+	// (--watch-since last week) or to scope a targeted investigation to a window.
+	WatchSince string `yaml:"watch_since"`
+	WatchUntil string `yaml:"watch_until"`
+
 	// Pre-filter
 	MaxFilesPerCommit int `yaml:"max_files_per_commit"`
 
