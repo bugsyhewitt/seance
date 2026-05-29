@@ -579,3 +579,204 @@ func TestEngine_Confidence_Bounded(t *testing.T) {
 		t.Errorf("confidence exceeded 1.0: got %f", findings[0].Confidence)
 	}
 }
+
+// ── Allowlist: regexes / paths / commits ─────────────────────────────────────
+
+// newContentAt builds FileContent at a specific file path and commit SHA so the
+// path- and commit-scoped allowlist tests can vary those independently of the
+// .env / abc123 defaults baked into newContent.
+func newContentAt(path, commitSHA, patch string, lines []string) fetch.FileContent {
+	return fetch.FileContent{
+		Event:   ingestion.CommitEvent{RepoOwner: "alice", RepoName: "repo", CommitSHA: commitSHA},
+		FileRef: ingestion.FileRef{Path: path, Status: "added"},
+		Patch:   patch,
+		Lines:   lines,
+	}
+}
+
+// TestEngine_AllowList_RegexSuppresses verifies that a match whose secret value
+// matches an allowlist regex is dropped — the gitleaks-standard `regexes`
+// mechanism, previously parsed but silently ignored.
+func TestEngine_AllowList_RegexSuppresses(t *testing.T) {
+	rules := []ruleset.Rule{
+		{
+			ID:       "aws-access-key-id",
+			Regex:    `AKIA[A-Z0-9]{16}`,
+			Keywords: []string{"AKIA"},
+			AllowList: ruleset.AllowList{
+				// Any AWS key ending in EXAMPLE is a documented placeholder.
+				Regexes: []string{`AKIA[A-Z0-9]{9}EXAMPLE`},
+			},
+		},
+	}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	content := newContent(
+		"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+	)
+	n, _ := engine.Scan(context.Background(), content)
+	if n != 0 {
+		t.Errorf("expected 0 findings (regex-allowlisted), got %d", n)
+	}
+}
+
+// TestEngine_AllowList_RegexLetsRealKeyThrough verifies the regex allowlist is
+// scoped — a real key that does not match the allowlist regex still fires.
+func TestEngine_AllowList_RegexLetsRealKeyThrough(t *testing.T) {
+	rules := []ruleset.Rule{
+		{
+			ID:       "aws-access-key-id",
+			Regex:    `AKIA[A-Z0-9]{16}`,
+			Keywords: []string{"AKIA"},
+			AllowList: ruleset.AllowList{
+				Regexes: []string{`AKIA[A-Z0-9]{9}EXAMPLE`},
+			},
+		},
+	}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	content := newContent(
+		"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF"},
+	)
+	n, _ := engine.Scan(context.Background(), content)
+	if n != 1 {
+		t.Errorf("expected 1 finding (not allowlisted), got %d", n)
+	}
+}
+
+// TestEngine_AllowList_PathSuppresses verifies that all matches in a file whose
+// path matches an allowlist path regex are dropped — the gitleaks `paths`
+// mechanism, previously parsed but silently ignored.
+func TestEngine_AllowList_PathSuppresses(t *testing.T) {
+	rules := []ruleset.Rule{
+		{
+			ID:       "aws-access-key-id",
+			Regex:    `AKIA[A-Z0-9]{16}`,
+			Keywords: []string{"AKIA"},
+			AllowList: ruleset.AllowList{
+				// Test fixtures are allowed to carry sample keys.
+				Paths: []string{`(^|/)testdata/`, `_test\.go$`},
+			},
+		},
+	}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	content := newContentAt(
+		"internal/fetch/testdata/sample.txt", "abc123",
+		"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+	)
+	n, _ := engine.Scan(context.Background(), content)
+	if n != 0 {
+		t.Errorf("expected 0 findings (path-allowlisted), got %d", n)
+	}
+}
+
+// TestEngine_AllowList_PathLetsOtherPathsThrough verifies the path allowlist is
+// scoped — a non-matching path still fires.
+func TestEngine_AllowList_PathLetsOtherPathsThrough(t *testing.T) {
+	rules := []ruleset.Rule{
+		{
+			ID:       "aws-access-key-id",
+			Regex:    `AKIA[A-Z0-9]{16}`,
+			Keywords: []string{"AKIA"},
+			AllowList: ruleset.AllowList{
+				Paths: []string{`(^|/)testdata/`},
+			},
+		},
+	}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	content := newContentAt(
+		"src/config/aws.go", "abc123",
+		"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF"},
+	)
+	n, _ := engine.Scan(context.Background(), content)
+	if n != 1 {
+		t.Errorf("expected 1 finding (path not allowlisted), got %d", n)
+	}
+}
+
+// TestEngine_AllowList_CommitSuppresses verifies that all matches in a commit
+// whose SHA is on the allowlist are dropped — the gitleaks `commits` mechanism,
+// previously parsed but silently ignored. SHA matching is prefix-tolerant so a
+// short SHA in the allowlist matches a full commit SHA.
+func TestEngine_AllowList_CommitSuppresses(t *testing.T) {
+	rules := []ruleset.Rule{
+		{
+			ID:       "aws-access-key-id",
+			Regex:    `AKIA[A-Z0-9]{16}`,
+			Keywords: []string{"AKIA"},
+			AllowList: ruleset.AllowList{
+				// Known-vetted commit; its findings are accepted false positives.
+				Commits: []string{"deadbeef"},
+			},
+		},
+	}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	content := newContentAt(
+		".env", "deadbeefcafe0123456789",
+		"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+	)
+	n, _ := engine.Scan(context.Background(), content)
+	if n != 0 {
+		t.Errorf("expected 0 findings (commit-allowlisted), got %d", n)
+	}
+}
+
+// TestEngine_AllowList_CommitLetsOtherCommitsThrough verifies the commit
+// allowlist is scoped — a different commit still fires.
+func TestEngine_AllowList_CommitLetsOtherCommitsThrough(t *testing.T) {
+	rules := []ruleset.Rule{
+		{
+			ID:       "aws-access-key-id",
+			Regex:    `AKIA[A-Z0-9]{16}`,
+			Keywords: []string{"AKIA"},
+			AllowList: ruleset.AllowList{
+				Commits: []string{"deadbeef"},
+			},
+		},
+	}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	content := newContentAt(
+		".env", "feedface00112233445566",
+		"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF"},
+	)
+	n, _ := engine.Scan(context.Background(), content)
+	if n != 1 {
+		t.Errorf("expected 1 finding (commit not allowlisted), got %d", n)
+	}
+}
+
+// TestEngine_AllowList_InvalidRegexIgnored verifies that an un-compilable
+// allowlist regex is skipped rather than crashing or silently suppressing
+// everything — a malformed allowlist entry must not nuke detection.
+func TestEngine_AllowList_InvalidRegexIgnored(t *testing.T) {
+	rules := []ruleset.Rule{
+		{
+			ID:       "aws-access-key-id",
+			Regex:    `AKIA[A-Z0-9]{16}`,
+			Keywords: []string{"AKIA"},
+			AllowList: ruleset.AllowList{
+				Regexes: []string{`(unclosed`},
+			},
+		},
+	}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	content := newContent(
+		"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF"},
+	)
+	n, _ := engine.Scan(context.Background(), content)
+	if n != 1 {
+		t.Errorf("expected 1 finding (bad allowlist regex ignored), got %d", n)
+	}
+}

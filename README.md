@@ -439,7 +439,47 @@ Community contributions to `signatures/` are welcome. Please include:
 - An `id` that is stable and unique
 - A `description` that names the credential type
 - `keywords` for fast pre-scan matching
-- An `allowlist.stopwords` block for known test/dummy values
+- An `allowlist` block for known test/dummy values
+
+### Allowlists
+
+Every rule may carry an `allowlist` block — the gitleaks-standard mechanism for
+suppressing matches a rule author knows are false positives. séance honors all
+four allowlist axes:
+
+```toml
+[[rules]]
+  id          = "aws-access-key-id"
+  description = "AWS Access Key ID"
+  regex       = '''AKIA[A-Z0-9]{16}'''
+  keywords    = ["AKIA"]
+
+  [rules.allowlist]
+    # Literal substrings — match anywhere in the matched value.
+    stopwords = ["EXAMPLE", "changeme", "placeholder"]
+    # Value regexes — suppress a whole *shape* of false positive without
+    # listing every literal (e.g. any AWS key ending in EXAMPLE).
+    regexes   = ['''AKIA[A-Z0-9]{9}EXAMPLE''']
+    # Path regexes — exempt entire files (test fixtures, vendored dirs, docs).
+    # A matching path suppresses every finding the rule would make in that file.
+    paths     = ['''(^|/)testdata/''', '''_test\.go$''']
+    # Commit SHAs — accept a reviewed commit's matches. Prefix-tolerant and
+    # case-insensitive: a short SHA matches the full commit SHA, like Git.
+    commits   = ["deadbeef"]
+```
+
+- **`stopwords`** — literal substrings; if any appears in the matched value, the
+  match is dropped.
+- **`regexes`** — patterns tested against the matched value; a match is dropped.
+- **`paths`** — patterns tested against the file path; a matching file is exempt
+  from the rule entirely.
+- **`commits`** — commit SHAs (full or abbreviated) whose matches are accepted.
+
+Allowlists are **fail-safe**: a malformed `regexes`/`paths` pattern is skipped,
+never treated as a universal match, so a typo can never silently disable
+detection. Allowlists scope a rule's false positives at authoring time;
+`--suppress-file` (see [Deduplication & suppression](#deduplication--suppression))
+silences individual findings at runtime without editing the ruleset.
 
 ### Hot-reload (SIGHUP)
 

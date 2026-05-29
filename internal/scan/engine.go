@@ -120,6 +120,15 @@ func (e *Engine) Scan(ctx context.Context, content fetch.FileContent) (int, erro
 		if !keywordMatch(content.Patch, rule.Keywords) {
 			continue
 		}
+		// File-scoped allowlist short-circuits: if this file's path or this
+		// commit is allowlisted for the rule, none of the rule's matches in
+		// this file can fire. Both are gitleaks-standard allowlist axes.
+		if pathAllowListed(content.FileRef.Path, rule.AllowList.Paths) {
+			continue
+		}
+		if commitAllowListed(content.Event.CommitSHA, rule.AllowList.Commits) {
+			continue
+		}
 		re, err := regexp.Compile(rule.Regex)
 		if err != nil {
 			continue
@@ -292,9 +301,66 @@ func keywordMatch(s string, keywords []string) bool {
 	return false
 }
 
+// isAllowListed reports whether a matched value is suppressed by the rule's
+// value-scoped allowlist axes: literal stopwords or value regexes. The
+// gitleaks-standard `regexes` axis (previously parsed but ignored) lets a rule
+// author silence a whole shape of false positive — e.g. any AWS key ending in
+// EXAMPLE — without listing every literal. A malformed allowlist regex is
+// skipped, not treated as a match, so a typo can never silently disable
+// detection.
 func isAllowListed(match string, al ruleset.AllowList) bool {
 	for _, sw := range al.StopWords {
 		if strings.Contains(match, sw) {
+			return true
+		}
+	}
+	for _, pat := range al.Regexes {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(match) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathAllowListed reports whether the file path matches any of the rule's
+// allowlist path regexes (gitleaks `paths`). A matching path suppresses every
+// finding the rule would produce in that file — the standard way to exempt
+// test fixtures, vendored dirs, or documentation from a noisy rule. Malformed
+// patterns are skipped so a typo cannot disable the rule.
+func pathAllowListed(path string, patterns []string) bool {
+	for _, pat := range patterns {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// commitAllowListed reports whether the commit SHA is on the rule's allowlist
+// (gitleaks `commits`) — an operator's "this commit was reviewed, its matches
+// are accepted" list. Matching is prefix-tolerant and case-insensitive: an
+// allowlist entry that is a prefix of the commit SHA (e.g. a short 8-char SHA
+// listed against a full 40-char one) matches, mirroring how Git itself accepts
+// abbreviated SHAs. Empty allowlist entries never match.
+func commitAllowListed(sha string, commits []string) bool {
+	if sha == "" {
+		return false
+	}
+	lower := strings.ToLower(sha)
+	for _, c := range commits {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c == "" {
+			continue
+		}
+		if strings.HasPrefix(lower, c) {
 			return true
 		}
 	}

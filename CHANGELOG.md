@@ -6,6 +6,34 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Honor `regexes`, `paths`, and `commits` allowlist axes** (scan engine)
+- The `ruleset.AllowList` struct has carried `Regexes`, `Paths`, and `Commits`
+  fields since v0.1 — declared, documented as gitleaks-compatible, and parsed
+  from every signatures TOML — but the scan engine only ever checked
+  `StopWords`. A rule author who wrote a `regexes`, `paths`, or `commits`
+  allowlist (the standard gitleaks way to silence false positives) had it
+  silently ignored, so the false positives the rule explicitly tried to suppress
+  fired anyway. This was shipped-but-dead allowlist code: three of four
+  documented suppression axes did nothing.
+- `internal/scan/engine.go` now honors all four axes. `regexes` are tested
+  against the matched value alongside `stopwords` (per-match). `paths` are tested
+  against the file path and `commits` against the commit SHA as rule-scoped
+  short-circuits — a matching path or commit suppresses every finding the rule
+  would produce in that file. Commit matching is prefix-tolerant and
+  case-insensitive, so a short SHA matches a full commit SHA the way Git accepts
+  abbreviated SHAs.
+- **Fail-safe:** a malformed `regexes`/`paths` pattern is skipped, never treated
+  as a universal match, so a typo in an allowlist can never silently disable a
+  rule. This mirrors the existing fail-safe posture of SIGHUP reloads.
+- Purely additive and backward-compatible: rules that use only `stopwords` (the
+  two in `signatures/default.toml`, and any existing custom ruleset) behave
+  byte-for-byte as before. The never-emit-raw-secrets invariant is untouched —
+  allowlisting drops findings before any sink.
+- Tests: seven new cases in `internal/scan/engine_test.go` covering regex
+  suppression + scoping, path suppression + scoping, commit suppression +
+  scoping, and the malformed-regex fail-safe. README "Signatures" section gains
+  an "Allowlists" subsection documenting all four axes.
+
 **SARIF 2.1.0 report output (`--sarif-file`)** (output + config + pipeline)
 - New `internal/output/sarif` package implementing `output.Sink`: buffers each
   redacted `Finding` and, on shutdown, writes a single SARIF 2.1.0 document
