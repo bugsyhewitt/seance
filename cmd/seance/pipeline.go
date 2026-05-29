@@ -33,6 +33,15 @@ import (
 )
 
 func runPipeline(ctx context.Context, c config.Config) error {
+	// ctx is the parent (signal-driven) context for the whole run. We wrap it in
+	// a cancelable child so the --output-limit machinery can request a clean
+	// shutdown the same way SIGINT does: cancel the context, then the existing
+	// shutdown path (deferred sink Close, state persist, ETag capture) runs
+	// unchanged. Wrapping at this layer means the cancel is in scope for every
+	// goroutine spawned below — provider, metrics, eviction, hot-reload — exactly
+	// like the signal-cancel already is.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	// Validate the stdout streaming format (--output) up front so an unsupported
 	// value fails the run loudly instead of being silently ignored. --output has
 	// always been parsed and defaulted to "json" but was never consumed; this is
@@ -165,10 +174,30 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		return fmt.Errorf("min-confidence must be between 0.0 and 1.0, got %.2f", c.MinConfidence)
 	}
 
+	// Global output limit (--output-limit). Validate up front so a negative value
+	// (a typo, not a sub-zero cap) fails the run loudly instead of silently
+	// reverting to "no cap". A value of 0 keeps the unlimited default.
+	if c.OutputLimit < 0 {
+		return fmt.Errorf("output-limit must be >= 0, got %d", c.OutputLimit)
+	}
+
 	engine := scan.New(rules, sinks...)
 	if c.MinConfidence > 0 {
 		engine.WithMinConfidence(c.MinConfidence)
 		fmt.Fprintf(os.Stderr, "séance: confidence floor enabled — only findings with confidence >= %.2f reach any sink\n", c.MinConfidence)
+	}
+	if c.OutputLimit > 0 {
+		// On reaching the cap, cancel the run context exactly the way SIGINT
+		// does. Every deferred Close/persist/ETag-capture in this function then
+		// runs in the same order, so the SARIF document is still written, the
+		// webhook queue is still drained, and state is still flushed. The
+		// callback fires at most once (the engine guards with a CAS).
+		limit := c.OutputLimit
+		engine.WithOutputLimit(limit, func() {
+			fmt.Fprintf(os.Stderr, "séance: output limit reached (%d findings) — shutting down cleanly\n", limit)
+			cancel()
+		})
+		fmt.Fprintf(os.Stderr, "séance: output limit enabled — run will stop after %d findings\n", limit)
 	}
 
 	// Categorical tag filter (--tag / --exclude-tag). Installed only when at least
@@ -323,6 +352,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		placeholdersDropped := engine.PlaceholderDroppedCount()
 		findingsBelowConfidence := engine.BelowConfidenceCount()
 		findingsTagFiltered := engine.TagFilteredCount()
+		findingsAfterLimit := engine.DroppedAfterLimitCount()
 
 		var alertsSent, alertsFailed, alertsDropped uint64
 		if webhookSink != nil {
@@ -340,7 +370,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -352,6 +382,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			findingsSuppressed,
 			findingsBelowConfidence,
 			findingsTagFiltered,
+			findingsAfterLimit,
 			placeholdersDropped,
 			seenTracked,
 			seenFindingsTracked,

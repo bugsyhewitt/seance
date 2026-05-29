@@ -150,6 +150,22 @@ type Config struct {
 	// --output-file names a real file (not stdout).
 	OutputMaxBytes int64 `toml:"output_max_bytes" yaml:"output_max_bytes"`
 
+	// OutputLimit caps the total number of findings emitted to every sink in a
+	// single run. When OutputLimit > 0, séance counts each emitted finding (after
+	// the confidence floor, tag filter, placeholder filter, and dedup/suppress
+	// layers — i.e. only findings that actually reached the sink fan-out) and
+	// triggers a clean shutdown the moment the cap is reached. The in-flight scan
+	// completes, every sink's Close is honoured (so a buffered SARIF document is
+	// still written and the webhook queue is still drained), and state is
+	// persisted on the way out — the same exit path as SIGINT/SIGTERM. The cap
+	// applies engine-wide: every sink (stdout/NDJSON, --output-file, --sarif-file,
+	// --tui, webhook) sees exactly the same first OutputLimit findings, so a
+	// downstream consumer cannot disagree with the SARIF report about how many
+	// findings the run produced. 0 (the default) imposes no cap — byte-for-byte
+	// the prior behaviour. The dominant use cases are CI gates ("fail the build
+	// if N+ findings"), bounded research runs, and demos.
+	OutputLimit int `toml:"output_limit" yaml:"output_limit"`
+
 	// SarifPath is an optional path to which séance writes a SARIF 2.1.0 document
 	// of all findings observed during the run. SARIF (the OASIS Static Analysis
 	// Results Interchange Format) is ingestible by GitHub Advanced Security / code

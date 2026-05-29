@@ -73,6 +73,36 @@ type Engine struct {
 	// tagFiltered counts candidate findings dropped by the include/exclude tag
 	// filter. Read atomically for the findings_tag_filtered_total metric.
 	tagFiltered uint64
+
+	// outputLimit, when > 0, caps the total number of findings the engine emits
+	// to its sinks in this run. Once the cap is reached every additional finding
+	// is dropped before the sink fan-out (the same precondition the dedup,
+	// confidence-floor, and tag-filter drops use), counted in droppedAfterLimit,
+	// and onLimitReached is fired exactly once so the pipeline can begin a clean
+	// shutdown (drain sinks, persist state, exit 0). Zero (the default) imposes
+	// no cap — byte-for-byte the prior behaviour. Fixed for the life of the
+	// engine; intended use is one WithOutputLimit call at construction.
+	outputLimit int64
+
+	// emittedCount is the running tally of findings actually emitted to the sinks
+	// (post every filter and the suppressor). It is the value compared against
+	// outputLimit. Read atomically; even with no cap configured it is updated so
+	// tests and metrics can sanity-check engine throughput.
+	emittedCount uint64
+
+	// droppedAfterLimit counts findings dropped because outputLimit was already
+	// reached. Read atomically for the findings_after_limit_total metric. Stays
+	// at zero unless OutputLimit is configured.
+	droppedAfterLimit uint64
+
+	// onLimitReached is invoked exactly once, the moment the outputLimit cap is
+	// reached. The pipeline wires this to its context-cancel function so a
+	// limit-reached run begins a clean shutdown the same way a SIGINT does: the
+	// in-flight scan completes, every sink's Close is honoured (so a buffered
+	// SARIF document is still written and the webhook queue is still drained),
+	// and state is persisted. limitFired guards the single-firing invariant.
+	onLimitReached func()
+	limitFired     uint32
 }
 
 // Suppressor decides whether a finding should be suppressed (not emitted) on the
@@ -192,6 +222,47 @@ func (e *Engine) tagFilterDrops(tags []string) bool {
 	return false
 }
 
+// WithOutputLimit returns the engine with a global cap on the number of
+// findings it will emit to its sinks in this run. When limit > 0 the engine
+// counts every finding that reaches the sink fan-out (after the confidence
+// floor, tag filter, placeholder filter, and suppressor) and, the moment that
+// tally hits the cap, fires onReached exactly once. The pipeline wires
+// onReached to its context-cancel so a limit-reached run begins a clean
+// shutdown — every sink's Close runs, the SARIF document is written, the
+// webhook queue is drained, and state is persisted — the same exit path as a
+// SIGINT. Subsequent findings are dropped before any sink sees them and counted
+// in DroppedAfterLimitCount so the suppression is observable.
+//
+// limit <= 0 imposes no cap; onReached is never called and behavior is
+// byte-for-byte unchanged. A nil onReached is accepted (the cap still drops
+// excess findings; only the shutdown signal is omitted) so the limit feature is
+// useful even in tests or callers that prefer to discover the cap by polling
+// DroppedAfterLimitCount. Intended to be called once at construction, before
+// Scan runs.
+func (e *Engine) WithOutputLimit(limit int, onReached func()) *Engine {
+	if limit < 0 {
+		limit = 0
+	}
+	e.outputLimit = int64(limit)
+	e.onLimitReached = onReached
+	return e
+}
+
+// EmittedCount returns the cumulative number of findings the engine has emitted
+// to its sinks (post every filter and the suppressor). Exposed mostly for tests
+// and the output-limit machinery; the per-sink counters are the operator-facing
+// numbers.
+func (e *Engine) EmittedCount() uint64 {
+	return atomic.LoadUint64(&e.emittedCount)
+}
+
+// DroppedAfterLimitCount returns the cumulative number of findings dropped
+// because the configured --output-limit cap was already reached. Used for the
+// findings_after_limit_total metric. Stays at zero unless OutputLimit is set.
+func (e *Engine) DroppedAfterLimitCount() uint64 {
+	return atomic.LoadUint64(&e.droppedAfterLimit)
+}
+
 // SuppressedCount returns the cumulative number of findings dropped by the
 // suppressor. Used for the findings_suppressed_total metric.
 func (e *Engine) SuppressedCount() uint64 {
@@ -235,6 +306,20 @@ func (e *Engine) RuleCount() int {
 	e.rulesMu.RLock()
 	defer e.rulesMu.RUnlock()
 	return len(e.rules)
+}
+
+// fireLimitReached invokes onLimitReached at most once for the life of the
+// engine. Guarded by a CAS on limitFired so concurrent emit/drop sites racing
+// against each other cannot double-fire the shutdown signal. A nil callback is
+// tolerated (the CAS still flips, so a later WithOutputLimit-with-callback
+// instance cannot retroactively fire either, but in practice WithOutputLimit is
+// called once at construction).
+func (e *Engine) fireLimitReached() {
+	if atomic.CompareAndSwapUint32(&e.limitFired, 0, 1) {
+		if e.onLimitReached != nil {
+			e.onLimitReached()
+		}
+	}
 }
 
 // Scan runs all rules against content and emits Findings to all sinks.
@@ -370,12 +455,38 @@ func (e *Engine) Scan(ctx context.Context, content fetch.FileContent) (int, erro
 					e.suppressor.MarkSeen(finding.Fingerprint)
 				}
 
+				// Global output limit (--output-limit). Once the configured cap is
+				// reached, every additional finding is dropped before the sink
+				// fan-out — so every sink (stdout, file, SARIF, TUI, webhook) sees
+				// exactly the same first N findings and a downstream consumer cannot
+				// disagree with the SARIF report. The first drop fires the pipeline's
+				// shutdown signal exactly once so the run exits cleanly through the
+				// usual Close/drain/persist path. With outputLimit == 0 the check is a
+				// single load-and-compare, leaving the unconfigured path unchanged.
+				if e.outputLimit > 0 {
+					if int64(atomic.LoadUint64(&e.emittedCount)) >= e.outputLimit {
+						atomic.AddUint64(&e.droppedAfterLimit, 1)
+						e.fireLimitReached()
+						continue
+					}
+				}
+
 				for _, sink := range e.sinks {
 					if err := sink.Emit(ctx, finding); err != nil {
 						return total, err
 					}
 				}
+				atomic.AddUint64(&e.emittedCount, 1)
 				total++
+
+				// If this emission brought us to the cap, fire the shutdown signal
+				// immediately — without it the run would only react on the *next*
+				// finding (which might never arrive on a quiet feed). The fire is
+				// idempotent so a concurrent drop path racing with this emit cannot
+				// double-fire.
+				if e.outputLimit > 0 && int64(atomic.LoadUint64(&e.emittedCount)) >= e.outputLimit {
+					e.fireLimitReached()
+				}
 			}
 		}
 	}

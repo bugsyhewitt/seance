@@ -6,6 +6,38 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Bounded run — finding cap (`--output-limit`)** (scan engine, config, cmd)
+- New `--output-limit` flag (and `output_limit` config key) caps the total
+  number of findings the run emits across **all** sinks. Targets two real
+  workflows the run-forever monitor never served: a **CI gate** that fails the
+  build the moment a finding lands (`--output-limit 1`) and a **bounded research
+  run** or demo capped at N findings.
+- The cap is **engine-wide** and applied at the sink fan-out, so stdout/NDJSON,
+  `--output-file`, `--sarif-file`, `--tui`, and the webhook all see the
+  **identical** first-N findings. A downstream consumer reading the SARIF report
+  can never disagree with another reading the NDJSON stream about which findings
+  the run kept.
+- **Clean shutdown.** When the cap is reached séance cancels the run context the
+  same way `SIGINT` does. The in-flight scan completes, every sink's `Close` is
+  honoured (the buffered SARIF document is still written, the webhook queue is
+  still drained), and state — seen-commits, seen-finding fingerprints, ETag —
+  is persisted to `state.json`. Exit status is `0`, like a normal shutdown.
+- Composes with every other engine-wide filter: the cap counts only findings
+  that would have been emitted (after the confidence floor, tag filter,
+  placeholder filter, and the suppressor), so noise the engine was already going
+  to drop never consumes a slot.
+- New `findings_after_limit_total` metric on the stderr `key=value` line counts
+  any findings that arrived after the cap was reached but before the shutdown
+  completed (typically a handful from the in-flight scan).
+- A negative `--output-limit` is rejected at startup (a typo, not a sub-zero
+  cap); `0` (the default) imposes no cap — byte-for-byte the prior behavior.
+- Follows the `defaults < file < flags` precedence like every other config field.
+- Tests: `internal/scan/outputlimit_test.go` (cap enforced, callback fires
+  exactly once, zero/negative disable the cap, every sink sees the identical
+  first-N), `pkg/config/config_test.go` (TOML decoding), and
+  `cmd/seance/config_test.go` (flag-beats-file precedence). README documents the
+  flag, examples, the shutdown guarantee, the metric, and the config-file key.
+
 **Categorical tag output filter (`--tag` / `--exclude-tag`)** (scan engine, config, cmd)
 - New `--tag` and `--exclude-tag` flags (and `include_tags` / `exclude_tags` config
   keys) filter findings by their rule's **credential class** — the categorical
