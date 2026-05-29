@@ -6,6 +6,34 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Categorical tag output filter (`--tag` / `--exclude-tag`)** (scan engine, config, cmd)
+- New `--tag` and `--exclude-tag` flags (and `include_tags` / `exclude_tags` config
+  keys) filter findings by their rule's **credential class** — the categorical
+  complement to the numeric `--min-confidence` floor. `--tag aws --tag gcp` admits
+  only findings whose rule carries one of the listed tags; `--exclude-tag generic`
+  drops a noisy class. Both are repeatable and case-insensitive.
+- The filter is **engine-wide**: it drops findings before the dedup/sink fan-out, so
+  every sink (stdout/NDJSON, `--output-file`, `--sarif-file`, `--tui`, the webhook)
+  surfaces the identical filtered set. A tag-dropped finding never consumes a dedup
+  slot and never reaches output — the never-store-raw invariant holds on the drop
+  path (nothing is emitted at all).
+- Precedence: `--exclude-tag` **wins over** `--tag` when a tag appears on both lists.
+  Matching trims whitespace and is case-insensitive (`--tag AWS` matches `aws`). Both
+  lists empty (the default) impose no filtering — byte-for-byte the prior behavior.
+- Applied **after** `--min-confidence` and **before** dedup, so the two gates compose:
+  a finding must clear both the confidence floor and the tag filter to emit. This lets
+  an operator narrow a firehose to just the classes they hunt, or silence a class,
+  across every sink at once without editing the ruleset.
+- New `findings_tag_filtered_total` metric on the stderr `key=value` line counts
+  findings the tag filter dropped, so the trade-off is observable alongside
+  `findings_below_confidence_total`.
+- Follows the `defaults < file < flags` precedence like every other config field.
+- Tests: `internal/scan/tagfilter_test.go` (include admits/drops, exclude admits/drops,
+  exclude-wins-over-include, case-insensitive, no-filter/whitespace-only no-op,
+  composition with `--min-confidence`, no-raw-leak on the drop path) and
+  `cmd/seance/config_test.go` (flag-beats-file precedence). README documents the flags,
+  examples, precedence, the metric, and the config-file keys.
+
 **Size-based rotation for `--output-file` (`--output-max-bytes`)** (output/file, config, cmd)
 - New `--output-max-bytes` flag (and `output_max_bytes` config key) bounds the
   durable `--output-file` NDJSON record by rotating it in place — no external
