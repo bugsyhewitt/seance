@@ -649,6 +649,8 @@ Community contributions to `signatures/` are welcome. Please include:
 - A `description` that names the credential type
 - `keywords` for fast pre-scan matching
 - An `allowlist` block for known test/dummy values
+- Optionally, a `confidence` base if the rule is markedly higher- or
+  lower-trust than the default (see [Per-rule confidence](#per-rule-confidence-confidence))
 
 ### Built-in coverage
 
@@ -711,6 +713,48 @@ never treated as a universal match, so a typo can never silently disable
 detection. Allowlists scope a rule's false positives at authoring time;
 `--suppress-file` (see [Deduplication & suppression](#deduplication--suppression))
 silences individual findings at runtime without editing the ruleset.
+
+### Per-rule confidence (`confidence`)
+
+Every finding carries a `confidence` score in `[0.0, 1.0]` that séance computes
+from rule specificity, entropy headroom, and path weight (see [Confidence
+floor](#confidence-floor---min-confidence)). The starting point for that
+computation is a default base of `0.80`. A rule may override that base with an
+optional `confidence` field — a per-rule dial that lets a rule author make a
+high-trust rule score higher, or a noisy rule lower, **without touching engine
+code**:
+
+```toml
+[[rules]]
+  id          = "github-pat-fine-grained"
+  description = "GitHub fine-grained PAT"
+  regex       = '''github_pat_[0-9a-zA-Z_]{82}'''
+  keywords    = ["github_pat_"]
+  confidence  = 0.98   # structurally unambiguous prefix — trust it highly
+
+[[rules]]
+  id          = "generic-api-key"
+  description = "Generic api_key assignment"
+  regex       = '''api[_-]?key\s*=\s*['"][0-9a-zA-Z]{16,}['"]'''
+  keywords    = ["api"]
+  tags        = ["generic"]
+  confidence  = 0.55   # wide net — start lower so the floor filters it sooner
+```
+
+- The override sets the **base** score; the engine's specificity bonus, entropy
+  headroom, and the generic-on-non-suspicious-path penalty still apply on top,
+  and the final score is clamped to `[0.0, 1.0]`.
+- Omitting `confidence` (or setting it to `0`) leaves the rule on the default
+  base of `0.80` — byte-for-byte the prior behavior.
+- It composes with `--min-confidence`: re-basing a rule low enough pushes its
+  findings under the global floor, so one TOML edit can quiet a noisy rule across
+  **every** sink at once.
+
+`confidence` is **fail-safe**, like allowlists: a value outside `[0.0, 1.0]` is
+ignored at runtime (the rule falls back to the default base, so a typo never
+silently disables detection), and `seance rules validate` (see
+[Rule validation](#validating-a-ruleset-seance-rules-validate)) flags the out-of-range value at edit time so
+the author learns the override is doing nothing.
 
 ### Global placeholder / dummy-value filter (always on)
 
@@ -783,6 +827,8 @@ It reports the exact defects the engine would tolerate at runtime:
 - a rule with no `keywords` (**warning** — its regex runs against every line, a
   performance and false-positive hazard) or an impossible `entropy` floor
   (**warning** — the rule can never fire)
+- a `confidence` override outside `[0.0, 1.0]` (**warning** — the engine ignores
+  it and uses the default base, so the author's tuning silently does nothing)
 
 Example output against a ruleset with a typo:
 

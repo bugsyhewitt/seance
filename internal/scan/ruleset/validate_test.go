@@ -275,6 +275,48 @@ func TestValidate_ImplausibleEntropyIsWarning(t *testing.T) {
 	}
 }
 
+func TestValidate_OutOfRangeConfidenceIsWarning(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		conf float64
+	}{
+		{"negative", -0.5},
+		{"above-one", 1.5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := &Ruleset{Rules: []Rule{{
+				ID:         "conf",
+				Regex:      `AKIA[A-Z0-9]{16}`,
+				Keywords:   []string{"AKIA"},
+				Confidence: tc.conf,
+			}}}
+			problems := Validate(rs)
+			p, ok := findProblem(problems, "confidence")
+			if !ok {
+				t.Fatalf("expected a confidence warning for %.2f, got %v", tc.conf, problems)
+			}
+			if p.Severity != SeverityWarning {
+				t.Errorf("out-of-range confidence should be a warning, got %q", p.Severity)
+			}
+		})
+	}
+}
+
+func TestValidate_InRangeConfidenceIsClean(t *testing.T) {
+	// Both a valid override and the default 0 ("use engine base") are clean.
+	for _, conf := range []float64{0.0, 0.5, 1.0} {
+		rs := &Ruleset{Rules: []Rule{{
+			ID:         "conf",
+			Regex:      `AKIA[A-Z0-9]{16}`,
+			Keywords:   []string{"AKIA"},
+			Confidence: conf,
+		}}}
+		if _, ok := findProblem(Validate(rs), "confidence"); ok {
+			t.Errorf("confidence %.2f should not be flagged", conf)
+		}
+	}
+}
+
 func TestValidate_MultipleProblemsAreAllReported(t *testing.T) {
 	rs := &Ruleset{Rules: []Rule{
 		{ID: "", Regex: `bad[`, Keywords: nil},                            // missing id + bad regex + no keywords
