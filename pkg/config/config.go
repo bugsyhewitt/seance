@@ -113,7 +113,13 @@ type Config struct {
 	SuppressFile string `toml:"suppress_file" yaml:"suppress_file"`
 
 	// Output
-	OutputFormat string `toml:"output_format" yaml:"output_format"` // "json", "sarif" (v0.3+)
+	// OutputFormat selects the primary stdout streaming sink: "json" (NDJSON, the
+	// default) or "text" (one compact, human-readable, grep-friendly line per
+	// finding). It governs only stdout; SARIF is a document written via SarifPath
+	// (--sarif-file), not a stream, so "sarif" is rejected here with a hint. When
+	// --tui takes over an interactive stdout this is ignored (the live feed wins).
+	// An unsupported value fails the run loudly rather than being silently ignored.
+	OutputFormat string `toml:"output_format" yaml:"output_format"` // "json" (default) | "text"
 	OutputPath   string `toml:"output_path" yaml:"output_path"`     // "-" for stdout
 
 	// SarifPath is an optional path to which séance writes a SARIF 2.1.0 document

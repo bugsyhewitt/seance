@@ -369,6 +369,53 @@ only from already-redacted/locator material, it never embeds raw secret bytes.
 Raw secret material is never written to disk, logs, or any output. This is a
 hard invariant, not a configuration option.
 
+### Choosing the stdout stream (`--output`)
+
+`--output` selects how findings are streamed to **stdout**. Two streaming
+formats are available:
+
+| `--output` | Stream |
+|---|---|
+| `json` (default) | Newline-delimited JSON (NDJSON) — one `Finding` object per line, the format shown above. Ideal for `jq`, log stores, and SIEM ingestion. |
+| `text` | One compact, human-readable line per finding. Grep- and `awk`-friendly, easy to eyeball while tailing the feed, without the NDJSON verbosity or the full-screen `--tui` takeover. |
+
+A `text` line looks like:
+
+```
+[HIGH] rule=aws-access-key repo=alice/repo file=config/prod.env:12 conf=0.90 redacted=AKIA****WXYZ fp=sha256:9b1e...c4
+```
+
+The leading `[HIGH]` / `[MED]` / `[LOW]` tag buckets the finding by confidence
+(the same thresholds the SARIF severity mapping uses), so `seance --output text |
+grep '^\[HIGH\]'` filters to the high-confidence findings at a glance. Every
+field comes from the already-redacted `Finding`; like every séance sink, the
+text stream can never contain a raw secret.
+
+```bash
+# Default NDJSON stream (unchanged):
+seance --output json | jq .
+
+# Human-readable line stream:
+seance --output text
+
+# Only the high-confidence lines:
+seance --output text | grep '^\[HIGH\]'
+```
+
+Notes:
+
+- **Validated, not silently ignored.** An unsupported value (a typo, or `yaml`)
+  fails the run at startup with a clear message rather than being quietly
+  dropped. `--output sarif` is rejected with a pointer to `--sarif-file`, because
+  SARIF is a *document* (written once on shutdown), not a stdout stream — see
+  [SARIF report](#sarif-report---sarif-file).
+- **`--output` governs only stdout.** It composes with `--output-file` (durable
+  NDJSON to disk), `--sarif-file`, and `--webhook-url` unchanged — those sinks
+  keep their own formats regardless of `--output`.
+- **`--tui` wins on an interactive terminal.** When `--tui` takes over stdout,
+  `--output` is ignored; when `--tui` falls back (non-TTY), it falls back to the
+  `--output` stream you selected.
+
 ### Live terminal feed (`--tui`)
 
 Running séance interactively, the raw NDJSON firehose is hard to read at a

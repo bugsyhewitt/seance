@@ -22,6 +22,7 @@ import (
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	"github.com/bugsyhewitt/seance/internal/output/sarif"
+	outtext "github.com/bugsyhewitt/seance/internal/output/text"
 	"github.com/bugsyhewitt/seance/internal/output/tui"
 	"github.com/bugsyhewitt/seance/internal/output/webhook"
 	"github.com/bugsyhewitt/seance/internal/prefilter"
@@ -32,6 +33,14 @@ import (
 )
 
 func runPipeline(ctx context.Context, c config.Config) error {
+	// Validate the stdout streaming format (--output) up front so an unsupported
+	// value fails the run loudly instead of being silently ignored. --output has
+	// always been parsed and defaulted to "json" but was never consumed; this is
+	// where it finally governs the primary stdout sink.
+	if _, err := streamFormat(c.OutputFormat); err != nil {
+		return err
+	}
+
 	rs, err := ruleset.LoadFile(c.SignaturesPath)
 	if err != nil {
 		return fmt.Errorf("load signatures: %w", err)
@@ -530,19 +539,60 @@ func mergeProviders(ctx context.Context, providers ...ingestion.Provider) (<-cha
 // primaryStdoutSink chooses séance's primary stdout output sink. When --tui is
 // set AND stdout is an interactive terminal, it returns the live TUI feed;
 // otherwise (no --tui, or stdout redirected to a pipe/file/CI) it returns the
-// raw NDJSON sink. This is the graceful-degradation contract: --tui on a
-// non-TTY silently becomes NDJSON so downstream consumers are never corrupted by
-// terminal escape sequences. The choice changes only presentation — the scan,
-// dedup, and alerting path is identical for both.
+// streaming sink selected by --output (the OutputFormat): NDJSON ("json", the
+// default) or the compact human-readable line stream ("text"). This is the
+// graceful-degradation contract: --tui on a non-TTY silently becomes the chosen
+// stream so downstream consumers are never corrupted by terminal escape
+// sequences. The choice changes only presentation — the scan, dedup, and
+// alerting path is identical for every option. The format is validated in
+// runPipeline before this is called, so the error here is unreachable in
+// practice; defaulting to NDJSON is a defensive fallback.
 func primaryStdoutSink(c config.Config) output.Sink {
 	if c.TUI && tui.IsTTY(os.Stdout) {
 		fmt.Fprintf(os.Stderr, "séance: live terminal feed enabled (--tui)\n")
 		return tui.New(tui.Config{Writer: os.Stdout, TTY: true})
 	}
-	if c.TUI {
-		fmt.Fprintf(os.Stderr, "séance: --tui ignored — stdout is not a terminal; falling back to NDJSON\n")
+	format, err := streamFormat(c.OutputFormat)
+	if err != nil {
+		format = formatJSON
 	}
-	return ndjson.New(os.Stdout)
+	if c.TUI {
+		fmt.Fprintf(os.Stderr, "séance: --tui ignored — stdout is not a terminal; falling back to %s\n", format)
+	}
+	switch format {
+	case formatText:
+		return outtext.New(os.Stdout)
+	default:
+		return ndjson.New(os.Stdout)
+	}
+}
+
+// Supported --output streaming formats for the primary stdout sink. SARIF is
+// deliberately excluded here: it is a single buffered document, not a stream, and
+// is produced via --sarif-file; streamFormat points the operator there rather
+// than silently accepting a value the stdout path cannot honor.
+const (
+	formatJSON = "json"
+	formatText = "text"
+)
+
+// streamFormat normalizes and validates the --output value, returning the
+// canonical format name. An empty value defaults to "json" (NDJSON), preserving
+// the original behavior. "sarif" is rejected with a hint toward --sarif-file
+// because SARIF is a document sink, not a stdout stream. Any other value is an
+// error so a typo'd --output fails the run loudly instead of being silently
+// ignored (the old behavior, where --output had no effect at all).
+func streamFormat(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", formatJSON:
+		return formatJSON, nil
+	case formatText:
+		return formatText, nil
+	case "sarif":
+		return "", fmt.Errorf("--output sarif is not a stdout stream — SARIF is a document; use --sarif-file PATH instead")
+	default:
+		return "", fmt.Errorf("unsupported --output format %q: valid streaming formats are %q and %q (for SARIF use --sarif-file)", raw, formatJSON, formatText)
+	}
 }
 
 // describeWatchWindow renders a human-readable description of the committer-date
