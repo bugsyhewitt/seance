@@ -36,7 +36,20 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	if err != nil {
 		return fmt.Errorf("load signatures: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "séance: loaded %d rules from %s\n", len(rs.Rules), c.SignaturesPath)
+	loaded := len(rs.Rules)
+	// Apply operator rule-level selection (--enable-rule / --disable-rule) on top
+	// of the loaded signatures, so a rule can be turned on or off by ID without
+	// editing the shared TOML. With neither flag set this is a no-op and the full
+	// ruleset stays active.
+	rules := ruleset.Select(rs.Rules, c.EnableRules, c.DisableRules)
+	if len(c.EnableRules) > 0 || len(c.DisableRules) > 0 {
+		fmt.Fprintf(os.Stderr, "séance: loaded %d rules from %s, %d active after rule selection (--enable-rule/--disable-rule)\n", loaded, c.SignaturesPath, len(rules))
+		if len(rules) == 0 {
+			return fmt.Errorf("rule selection left 0 active rules — check --enable-rule/--disable-rule against the rule IDs in %s", c.SignaturesPath)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "séance: loaded %d rules from %s\n", loaded, c.SignaturesPath)
+	}
 
 	store := state.NewJSONFileStorage(filepath.Join(c.StateDir, "state.json"))
 	st, err := store.Load()
@@ -133,7 +146,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		return fmt.Errorf("min-confidence must be between 0.0 and 1.0, got %.2f", c.MinConfidence)
 	}
 
-	engine := scan.New(rs.Rules, sinks...)
+	engine := scan.New(rules, sinks...)
 	if c.MinConfidence > 0 {
 		engine.WithMinConfidence(c.MinConfidence)
 		fmt.Fprintf(os.Stderr, "séance: confidence floor enabled — only findings with confidence >= %.2f reach any sink\n", c.MinConfidence)
@@ -167,7 +180,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			case <-ctx.Done():
 				return
 			case <-hup:
-				reloadSignatures(engine, c.SignaturesPath)
+				reloadSignatures(engine, c.SignaturesPath, c.EnableRules, c.DisableRules)
 			}
 		}
 	}()
@@ -594,12 +607,14 @@ func loadSuppressFile(path string) ([]string, error) {
 	return fps, nil
 }
 
-// reloadSignatures re-reads the signatures file at path and swaps the engine's
+// reloadSignatures re-reads the signatures file at path, re-applies the
+// operator's rule-level selection (enable/disable), and swaps the engine's
 // active rule set on success. On any failure — unreadable file, malformed TOML,
-// or a file that parses to zero rules — it logs to stderr and leaves the
-// currently active rules untouched, so a bad edit can never silence a running
-// monitor. Triggered by SIGHUP.
-func reloadSignatures(engine *scan.Engine, path string) {
+// a file that parses to zero rules, or a selection that leaves zero rules — it
+// logs to stderr and leaves the currently active rules untouched, so a bad edit
+// (or a selection that no longer matches any rule in the new file) can never
+// silence a running monitor. Triggered by SIGHUP.
+func reloadSignatures(engine *scan.Engine, path string, enable, disable []string) {
 	rs, err := ruleset.LoadFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "séance: SIGHUP reload failed (%s): %v — keeping %d active rules\n", path, err, engine.RuleCount())
@@ -609,6 +624,17 @@ func reloadSignatures(engine *scan.Engine, path string) {
 		fmt.Fprintf(os.Stderr, "séance: SIGHUP reload skipped (%s): file contains 0 rules — keeping %d active rules\n", path, engine.RuleCount())
 		return
 	}
-	engine.ReloadRules(rs.Rules)
+	// Re-apply the same --enable-rule/--disable-rule selection the run started
+	// with, so a hot-reloaded ruleset keeps honouring the operator's choice.
+	selected := ruleset.Select(rs.Rules, enable, disable)
+	if len(selected) == 0 {
+		fmt.Fprintf(os.Stderr, "séance: SIGHUP reload skipped (%s): rule selection (--enable-rule/--disable-rule) left 0 of %d rules — keeping %d active rules\n", path, len(rs.Rules), engine.RuleCount())
+		return
+	}
+	engine.ReloadRules(selected)
+	if len(enable) > 0 || len(disable) > 0 {
+		fmt.Fprintf(os.Stderr, "séance: SIGHUP reload — loaded %d rules from %s, %d active after rule selection\n", len(rs.Rules), path, len(selected))
+		return
+	}
 	fmt.Fprintf(os.Stderr, "séance: SIGHUP reload — loaded %d rules from %s\n", len(rs.Rules), path)
 }

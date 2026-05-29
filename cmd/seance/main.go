@@ -84,6 +84,10 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.GitHubToken = parsed.GitHubToken
 		case "signatures":
 			out.SignaturesPath = parsed.SignaturesPath
+		case "enable-rule":
+			out.EnableRules = parsed.EnableRules
+		case "disable-rule":
+			out.DisableRules = parsed.DisableRules
 		case "output":
 			out.OutputFormat = parsed.OutputFormat
 		case "output-file":
@@ -129,6 +133,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "path to a TOML config file holding any of the flags below; built-in defaults are the base, the file overlays them, and any flag you also pass on the command line overrides the file (defaults < file < flags); empty means flags-only")
 	rootCmd.PersistentFlags().StringVar(&cfg.GitHubToken, "token", cfg.GitHubToken, "GitHub personal access token")
 	rootCmd.PersistentFlags().StringVar(&cfg.SignaturesPath, "signatures", cfg.SignaturesPath, "path to TOML signatures file")
+	rootCmd.PersistentFlags().StringArrayVar(&cfg.EnableRules, "enable-rule", cfg.EnableRules, "rule ID to enable — when set (repeatable), ONLY the listed rules run and every other loaded rule is dropped (allowlist); empty runs all rules; the gitleaks --enable-rule analogue, applied on top of --signatures without editing it")
+	rootCmd.PersistentFlags().StringArrayVar(&cfg.DisableRules, "disable-rule", cfg.DisableRules, "rule ID to disable (repeatable) — the listed rules are dropped from the loaded ruleset; applied after --enable-rule and always wins over it; silence a noisy rule without editing --signatures")
 	rootCmd.PersistentFlags().StringVar(&cfg.OutputFormat, "output", cfg.OutputFormat, "output format: json")
 	rootCmd.PersistentFlags().StringVar(&cfg.OutputPath, "output-file", cfg.OutputPath, "also append redacted NDJSON findings to this file (created with its parent dir; append mode); '-' or empty means stdout only — pairs with --tui to keep a machine-readable record while watching the live feed")
 	rootCmd.PersistentFlags().StringVar(&cfg.SarifPath, "sarif-file", cfg.SarifPath, "also write a SARIF 2.1.0 report of all findings to this file (ingestible by GitHub code scanning and other SARIF tools); written once on shutdown; empty disables it")
