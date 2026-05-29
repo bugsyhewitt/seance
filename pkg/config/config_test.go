@@ -25,6 +25,7 @@ poll_interval_sec = 30
 min_confidence = 0.7
 webhook_url = "https://hooks.example.com/x"
 watch = ["acme-corp", "internal.example.com"]
+watch_interval_sec = 45
 force_push = false
 `)
 
@@ -47,6 +48,9 @@ force_push = false
 	}
 	if len(got.Watch) != 2 || got.Watch[0] != "acme-corp" || got.Watch[1] != "internal.example.com" {
 		t.Errorf("Watch = %v, want [acme-corp internal.example.com]", got.Watch)
+	}
+	if got.WatchIntervalSec != 45 {
+		t.Errorf("WatchIntervalSec = %d, want 45 (file override)", got.WatchIntervalSec)
 	}
 	// ForcePush defaults to true; the file sets it false — a bool override must
 	// take effect even when the file value equals the zero value.

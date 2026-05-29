@@ -6,6 +6,29 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Tunable `--watch` search cadence (`--watch-interval`)** (ingestion/search, config, cmd)
+- New `--watch-interval` flag (and `watch_interval_sec` config key) tunes, in
+  seconds, how often the `--watch` Search-API provider sweeps the keyword list.
+  The provider's built-in cadence is a conservative **90s** (chosen so a
+  multi-keyword watch list stays inside the 30 req/min Search-API quota — each
+  poll issues one request per keyword); this knob lets a single-keyword targeted
+  investigation poll faster, or a long-running background monitor poll slower to
+  conserve quota for other clients sharing the same token.
+- Values below a **10-second floor** are clamped up with a one-line stderr
+  warning, because polling faster would exhaust the quota almost immediately and
+  trap séance in perpetual low-budget backoff. `0` (the default) keeps the 90s
+  cadence — byte-for-byte the prior behaviour. The override has no effect unless
+  `--watch` keywords are configured.
+- Applies **only** to the search provider; the global events stream keeps its own
+  `--poll-interval`. The separate low-budget backoff and two-way rate-limit
+  recovery are untouched, so tuning the interval never weakens the quota
+  protection. A new `Provider.SetPollInterval` method carries the clamp logic and
+  returns the effective cadence, which the pipeline logs on startup.
+- Tests: `internal/ingestion/search/provider_test.go` adds override-applied,
+  below-floor-clamped, zero/negative-no-op, and cadence-governs-polling cases;
+  `pkg/config/config_test.go` asserts the new TOML key overlays. README documents
+  the flag, an example, and the config-file key.
+
 **SARIF GitHub code-scanning severity enrichment** (output/sarif)
 - The SARIF 2.1.0 report now enriches its `tool.driver.rules[]` catalog so GitHub
   Advanced Security / code scanning can triage séance's output **natively**. Each

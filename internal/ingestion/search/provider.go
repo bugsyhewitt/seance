@@ -55,6 +55,15 @@ const (
 	// provider backs off to LowBudgetInterval until the window resets. The Search
 	// API quota is small, so the floor is an absolute count, not a percentage.
 	lowBudgetFloor = 3
+
+	// minPollInterval is the smallest normal cadence the provider will accept
+	// from an operator. The authenticated Search-API quota is 30 req/min, and a
+	// single poll issues one request per watched keyword; polling faster than
+	// this would burn the minute window almost immediately with even a couple of
+	// keywords and trip the backoff path constantly. SetPollInterval clamps any
+	// shorter request up to this floor and logs the adjustment, so a too-eager
+	// --watch-interval cannot put séance into a perpetual rate-limit hole.
+	minPollInterval = 10 * time.Second
 )
 
 // Metrics holds live instrumentation counters. All fields are updated atomically.
@@ -145,6 +154,34 @@ func NewWithBaseURL(token, baseURL string, keywords ...string) *Provider {
 
 // Keywords returns the (cleaned) keyword list this provider watches.
 func (p *Provider) Keywords() []string { return p.keywords }
+
+// SetPollInterval overrides the normal cadence between full sweeps of the
+// keyword list (the value used when the Search-API budget is healthy). It is the
+// operator-facing tuning knob behind séance's --watch-interval flag: the default
+// of 90s is conservative for a multi-keyword watch list, but a single-keyword
+// targeted investigation can safely poll faster, while a long-running background
+// monitor may prefer to poll far more slowly to conserve quota for other clients
+// sharing the same token.
+//
+// d is clamped up to minPollInterval (10s) — a shorter value would exhaust the
+// 30 req/min Search-API quota almost immediately and keep the provider stuck in
+// its low-budget backoff, so séance refuses to honour it and logs the clamp. A
+// zero or negative d is a no-op: the provider keeps whatever interval it already
+// has (the default). The clamped interval is returned so callers can report the
+// effective cadence. SetPollInterval only adjusts the healthy-budget cadence; the
+// separate LowBudgetInterval backoff and the two-way rate-limit recovery are
+// unchanged, so tuning the interval never weakens the quota protection.
+func (p *Provider) SetPollInterval(d time.Duration) time.Duration {
+	if d <= 0 {
+		return p.PollInterval
+	}
+	if d < minPollInterval {
+		fmt.Fprintf(os.Stderr, "séance[search]: requested --watch-interval %s is below the %s floor — clamping to protect the Search-API quota\n", d, minPollInterval)
+		d = minPollInterval
+	}
+	p.PollInterval = d
+	return d
+}
 
 // SetDateRange scopes returned commits to a committer-date window. since and
 // until are calendar dates in YYYY-MM-DD form; either may be empty to leave that
