@@ -212,6 +212,12 @@ seance --watch acme-corp --watch-since 2026-01-01 --watch-until 2026-03-01
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'
 
+# Surface only high-confidence findings EVERYWHERE at once: --min-confidence is a
+# global floor applied before any sink, so stdout, --output-file, --sarif-file,
+# --tui, and the webhook all see only findings scoring at or above it. One dial to
+# trade recall for precision when the firehose gets noisy.
+seance --min-confidence 0.85
+
 # Watch it work: a live, confidence-colored terminal feed instead of raw NDJSON.
 # Falls back to NDJSON automatically when stdout is piped or redirected.
 seance --tui
@@ -455,6 +461,41 @@ either layer, and `seen_findings_tracked` reports the current size of the
 persistent fingerprint set. Because the dedup key is the privacy-preserving
 fingerprint, persisting it can never leak a credential — the never-store-raw
 invariant holds for free.
+
+### Confidence floor (`--min-confidence`)
+
+Dedup removes *repeats*; the confidence floor removes *low-signal* findings. Every
+finding carries a `confidence` score in `[0.0, 1.0]` (see [Output
+format](#output-format)) computed from rule specificity, entropy headroom, and
+path weight. `--min-confidence` is a **global floor**: any finding scoring below it
+is dropped before it reaches **any** sink — stdout/NDJSON, `--output-file`,
+`--sarif-file`, `--tui`, and the webhook all see the identical filtered set. It is
+the single dial that trades recall for precision across the whole tool, so a noisy
+firehose can be tightened to only the findings worth a human's attention with one
+flag.
+
+```bash
+# Only surface findings the scorer is confident about — everywhere at once.
+seance --min-confidence 0.85
+
+# Compose with the live feed and a durable record: both honor the same floor.
+seance --tui --output-file findings.ndjson --min-confidence 0.8
+```
+
+| Flag | Description |
+|------|-------------|
+| `--min-confidence` | Global confidence floor (`0.0`–`1.0`). Findings below it are dropped before every sink. Defaults to `0` (emit everything — unchanged behavior). Out-of-range values are rejected at startup. |
+
+The floor is applied **before** deduplication and the sink fan-out, so a
+sub-threshold finding never consumes a dedup slot and never reaches output — the
+never-store-raw invariant holds on the drop path too (nothing is emitted at all).
+The `findings_below_confidence_total` metric counts how many findings the floor
+dropped, so the trade-off is observable.
+
+> **Floor vs. webhook gate.** `--min-confidence` is engine-wide; `--webhook-min-confidence`
+> ([Webhook alerting](#webhook-alerting)) gates only the webhook channel and is
+> applied *on top of* the floor. Use the floor to set a baseline for all output and
+> the webhook gate to page on an even higher bar.
 
 ---
 
@@ -725,7 +766,8 @@ Live metrics are written to stderr every 60 s in `key=value` format:
 séance metrics ts=1234567890 push_events_total=454 force_pushes_total=3 \
   prefilter_passed_total=405 prefilter_dropped_total=49 fetches_total=405 \
   polls_total=17 findings_total=0 findings_suppressed_total=2 \
-  placeholders_dropped_total=11 seen_commits_tracked=412 seen_findings_tracked=6 \
+  findings_below_confidence_total=4 placeholders_dropped_total=11 \
+  seen_commits_tracked=412 seen_findings_tracked=6 \
   push_events_hr=1602.3 prefilter_survival_pct=89.2 fetches_hr=1429.3 \
   polls_hr=60.0 rate_limit_remaining=4592 rate_limit_reset_in=1981
 ```
@@ -742,6 +784,11 @@ shutdown before the state file is persisted.
 operator suppress-list, and `seen_findings_tracked` is the current size of the
 persistent fingerprint set — both bounded by the same TTL (see
 [Deduplication & suppression](#deduplication--suppression)).
+
+`findings_below_confidence_total` counts findings dropped by the global
+`--min-confidence` floor before they reached any sink (see
+[Confidence floor](#confidence-floor---min-confidence)). It stays at `0` unless a
+floor is set.
 
 `placeholders_dropped_total` counts matches dropped by the global
 placeholder/dummy-value filter — documentation samples, masks, and `your_key`

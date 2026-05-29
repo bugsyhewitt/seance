@@ -119,7 +119,19 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		defer s.Close()
 	}
 
+	// Global confidence floor (--min-confidence). Validated here so an out-of-range
+	// value fails the run loudly rather than silently clamping. When set above 0 it
+	// is installed on the engine, which drops sub-threshold findings before the
+	// dedup/sink fan-out — so every sink surfaces only high-confidence findings.
+	if c.MinConfidence < 0 || c.MinConfidence > 1 {
+		return fmt.Errorf("min-confidence must be between 0.0 and 1.0, got %.2f", c.MinConfidence)
+	}
+
 	engine := scan.New(rs.Rules, sinks...)
+	if c.MinConfidence > 0 {
+		engine.WithMinConfidence(c.MinConfidence)
+		fmt.Fprintf(os.Stderr, "séance: confidence floor enabled — only findings with confidence >= %.2f reach any sink\n", c.MinConfidence)
+	}
 
 	// Cross-run finding deduplication / re-leak suppression. The suppressor is
 	// backed by the persisted SeenFindings set (so a secret re-pushed or forked
@@ -248,6 +260,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 
 		findingsSuppressed := engine.SuppressedCount()
 		placeholdersDropped := engine.PlaceholderDroppedCount()
+		findingsBelowConfidence := engine.BelowConfidenceCount()
 
 		var alertsSent, alertsFailed, alertsDropped uint64
 		if webhookSink != nil {
@@ -265,7 +278,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -275,6 +288,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			provFetch,
 			findings,
 			findingsSuppressed,
+			findingsBelowConfidence,
 			placeholdersDropped,
 			seenTracked,
 			seenFindingsTracked,

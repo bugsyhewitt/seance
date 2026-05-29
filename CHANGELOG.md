@@ -6,6 +6,31 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Global confidence floor (`--min-confidence`)** (scan engine)
+- New `--min-confidence` flag (`0.0`–`1.0`) sets a global confidence floor: any
+  finding whose computed confidence score is below it is dropped before it reaches
+  **any** sink — stdout/NDJSON, `--output-file`, `--sarif-file`, `--tui`, and the
+  webhook all see the identical filtered set. It is the single dial that trades
+  recall for precision across the whole tool, so a noisy firehose can be tightened
+  to only the findings worth a human's attention with one flag.
+- Applied in the engine **before** deduplication and the sink fan-out, so a
+  sub-threshold finding never consumes a dedup slot and never produces output. The
+  never-store-raw invariant holds on the drop path too — nothing is emitted at all.
+- Distinct from `--webhook-min-confidence`, which gates only the webhook channel
+  and is applied on top of this engine-wide floor.
+- Defaults to `0` (emit everything — byte-for-byte the prior behavior). Out-of-range
+  values are rejected at startup so a typo fails the run loudly. New
+  `findings_below_confidence_total` metric counts findings dropped by the floor, so
+  the trade-off is observable on the stderr metrics line.
+- Self-contained: an engine field + `WithMinConfidence`/`BelowConfidenceCount` on
+  `internal/scan`, thin flag/validation/wiring in `cmd/seance` and `pkg/config`,
+  no new dependencies, no architecture change.
+- Tests: `internal/scan/minconfidence_test.go` (drop-below-floor with counter,
+  keep-at-or-above, zero-admits-everything, clamp of out-of-range thresholds, and
+  no-raw-leak on the drop path) plus an end-to-end
+  `cmd/seance/integration_test.go` case proving the floor gates a sub-threshold
+  finding across both the stdout and durable file sinks at once.
+
 **Committer-date scoping for `--watch` (`--watch-since` / `--watch-until`)** (search ingestion)
 - Two optional flags scope the targeted Search-API provider (`--watch`) to a
   committer-date window: `--watch-since YYYY-MM-DD` and `--watch-until

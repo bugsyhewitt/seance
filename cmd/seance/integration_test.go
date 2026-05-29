@@ -245,3 +245,75 @@ func TestEndToEnd_SarifSinkTeesAlongsideStdout(t *testing.T) {
 		t.Errorf("stdout sink should also have received the finding: %q", stdoutBuf.String())
 	}
 }
+
+// TestEndToEnd_MinConfidenceGatesAllSinks proves the engine-wide --min-confidence
+// floor (installed via WithMinConfidence, exactly as runPipeline does) suppresses
+// a sub-threshold finding before it reaches ANY sink — here both the stdout NDJSON
+// sink and a durable file sink — while a high-confidence finding in the same scan
+// passes to both. This is the cross-sink noise gate: one dial, every channel.
+func TestEndToEnd_MinConfidenceGatesAllSinks(t *testing.T) {
+	ctx := context.Background()
+
+	// Two rules: a high-specificity AWS rule (0.80 base + 0.10 prefix bonus = 0.90)
+	// and a generic rule that, on a non-suspicious path, scores 0.80 − 0.10 = 0.70.
+	rules := []ruleset.Rule{
+		{ID: "aws-high", Regex: `AKIA[A-Z0-9]{16}`, Keywords: []string{"AKIA"}},
+		{ID: "generic-low", Regex: `secret-token-[A-Za-z0-9]{20}`, Keywords: []string{"secret-token"}, Tags: []string{"generic"}},
+	}
+
+	var stdoutBuf bytes.Buffer
+	filePath := filepath.Join(t.TempDir(), "findings.ndjson")
+	fileSink, err := outfile.New(filePath)
+	if err != nil {
+		t.Fatalf("file sink: %v", err)
+	}
+	// Floor of 0.80 — admits the 0.90 AWS finding, drops the 0.70 generic one.
+	engine := scan.New(rules, ndjson.New(&stdoutBuf), fileSink).WithMinConfidence(0.80)
+
+	// Non-suspicious path so the generic rule keeps its 0.70 (a .env path would
+	// cancel the penalty and let it through, defeating the test).
+	fc := fetch.FileContent{
+		Event:   ingestion.CommitEvent{Provider: "fake", RepoOwner: "alice", RepoName: "repo", CommitSHA: "deadbeef"},
+		FileRef: ingestion.FileRef{Path: "docs/README.md", Status: "added"},
+		Patch:   "+AKIA2E4F6H8J0L2N4P6R secret-token-Ab3Cd4Ef5Gh6Ij7Kl8Mn\n",
+		Lines:   []string{"+AKIA2E4F6H8J0L2N4P6R secret-token-Ab3Cd4Ef5Gh6Ij7Kl8Mn"},
+	}
+	n, err := engine.Scan(ctx, fc)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 finding above the floor, got %d", n)
+	}
+	if got := engine.BelowConfidenceCount(); got != 1 {
+		t.Fatalf("expected 1 sub-floor drop, got %d", got)
+	}
+	if err := fileSink.Close(); err != nil {
+		t.Fatalf("file sink close: %v", err)
+	}
+
+	// The high-confidence rule passed to stdout; the low-confidence one did not.
+	if !strings.Contains(stdoutBuf.String(), "aws-high") {
+		t.Errorf("stdout missing the above-floor finding: %q", stdoutBuf.String())
+	}
+	if strings.Contains(stdoutBuf.String(), "generic-low") {
+		t.Errorf("stdout must NOT contain the sub-floor finding: %q", stdoutBuf.String())
+	}
+
+	// Same gating reached the durable file sink — the floor is engine-wide, not
+	// per-sink, so every channel sees the identical filtered set.
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file sink: %v", err)
+	}
+	if !strings.Contains(string(data), "aws-high") {
+		t.Errorf("file sink missing the above-floor finding: %q", string(data))
+	}
+	if strings.Contains(string(data), "generic-low") {
+		t.Errorf("file sink must NOT contain the sub-floor finding: %q", string(data))
+	}
+	// Never-store-raw invariant holds on both the passed and the dropped path.
+	if strings.Contains(string(data), "secret-token-Ab3Cd4Ef5Gh6Ij7Kl8Mn") || strings.Contains(stdoutBuf.String(), "secret-token-Ab3Cd4Ef5Gh6Ij7Kl8Mn") {
+		t.Error("raw secret value leaked into a sink")
+	}
+}

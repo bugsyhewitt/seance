@@ -41,6 +41,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.WatchUntil, "watch-until", cfg.WatchUntil, "scope --watch search results to commits with a committer-date on or before this date (YYYY-MM-DD); applies only to the search provider; empty leaves the search corpus unscoped")
 	rootCmd.PersistentFlags().BoolVar(&cfg.ForcePush, "force-push", cfg.ForcePush, "detect force-push history rewrites and scan the orphaned diff (one extra compare request per force-push)")
 	rootCmd.PersistentFlags().StringVar(&cfg.SuppressFile, "suppress-file", cfg.SuppressFile, "path to a newline-delimited list of finding fingerprints to always ignore (the .gitleaksignore analogue); '#' comments allowed")
+	rootCmd.PersistentFlags().Float64Var(&cfg.MinConfidence, "min-confidence", cfg.MinConfidence, "global confidence floor (0.0-1.0): drop findings below this score before they reach ANY sink (stdout, --output-file, --sarif-file, --tui, webhook); 0 emits everything; raise it to surface only high-confidence findings")
 	rootCmd.PersistentFlags().StringVar(&cfg.WebhookURL, "webhook-url", cfg.WebhookURL, "POST each finding (redacted) as JSON to this URL; empty disables the webhook sink")
 	rootCmd.PersistentFlags().StringArrayVar(&cfg.WebhookHeaders, "webhook-header", cfg.WebhookHeaders, "header added to every webhook POST as KEY:VALUE (repeatable, e.g. Authorization:Bearer xyz)")
 	rootCmd.PersistentFlags().Float64Var(&cfg.WebhookMinConfidence, "webhook-min-confidence", cfg.WebhookMinConfidence, "only POST findings with confidence at or above this threshold (0.0-1.0)")
