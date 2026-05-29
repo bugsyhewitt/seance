@@ -58,6 +58,24 @@ type Config struct {
 	SignaturesPath string  `toml:"signatures_path" yaml:"signatures_path"`
 	EntropyThresh  float64 `toml:"entropy_threshold" yaml:"entropy_threshold"`
 
+	// EnableRules and DisableRules apply rule-level selection to the loaded
+	// signatures by rule ID — the gitleaks --enable-rule / --disable-rule
+	// analogue. They let an operator turn an individual rule on or off at deploy
+	// time without editing (or forking) the shared signatures TOML.
+	//
+	// Semantics: when EnableRules is non-empty it is an allowlist — ONLY rules
+	// whose ID appears in it survive, every other rule is dropped. DisableRules is
+	// then a denylist applied on top — any rule whose ID appears in it is removed
+	// from whatever EnableRules left. DisableRules always wins over EnableRules.
+	// Matching is case-insensitive on the rule ID. Both empty (the default) leaves
+	// the full loaded ruleset active — byte-for-byte the prior behaviour.
+	//
+	// The selection is re-applied on every SIGHUP hot-reload, so a long-running
+	// monitor keeps honouring the operator's enable/disable choice even after the
+	// signatures file changes underneath it.
+	EnableRules  []string `toml:"enable_rules" yaml:"enable_rules"`
+	DisableRules []string `toml:"disable_rules" yaml:"disable_rules"`
+
 	// MinConfidence is a global confidence floor in [0.0, 1.0]. Any finding whose
 	// computed confidence score is below it is dropped before it reaches ANY sink —
 	// stdout/NDJSON, --output-file, --sarif-file, --tui, and the webhook — so the

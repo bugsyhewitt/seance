@@ -8,6 +8,7 @@ package ruleset
 
 import (
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -64,4 +65,69 @@ func Load(data []byte) (*Ruleset, error) {
 		return nil, err
 	}
 	return &rs, nil
+}
+
+// Select applies operator rule-level selection to a slice of rules and returns
+// the rules that survive, in their original order. It is the gitleaks
+// --enable-rule / --disable-rule analogue: a way to turn an individual rule on
+// or off by ID at deploy time, without editing the signatures TOML.
+//
+// Semantics (matching gitleaks):
+//
+//   - enable (allowlist): when non-empty, ONLY rules whose ID is in enable are
+//     considered; every other rule is dropped. When empty, every rule is
+//     considered (the prior behaviour).
+//   - disable (denylist): any rule whose ID is in disable is then removed from
+//     whatever the enable step left. disable always wins over enable, so listing
+//     the same ID in both yields a dropped rule.
+//
+// Matching is case-insensitive on the rule ID (rule IDs are conventionally
+// lowercase-kebab, and an operator typing a different case should still hit the
+// rule they mean). Blank entries in either list are ignored. A nil/empty enable
+// and a nil/empty disable returns the input rules unchanged (the byte-for-byte
+// prior behaviour), so the feature is purely opt-in.
+//
+// Select does not mutate the input slice; it returns a new slice referencing the
+// same Rule values.
+func Select(rules []Rule, enable, disable []string) []Rule {
+	enableSet := idSet(enable)
+	disableSet := idSet(disable)
+	if len(enableSet) == 0 && len(disableSet) == 0 {
+		return rules
+	}
+
+	out := make([]Rule, 0, len(rules))
+	for _, r := range rules {
+		id := strings.ToLower(strings.TrimSpace(r.ID))
+		if len(enableSet) > 0 {
+			if _, ok := enableSet[id]; !ok {
+				continue // not on the allowlist
+			}
+		}
+		if _, ok := disableSet[id]; ok {
+			continue // explicitly denied
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// idSet builds a lowercase, whitespace-trimmed set of rule IDs from a flag
+// slice, skipping blank entries. It returns nil for an empty/all-blank input so
+// callers can cheaply test len(set) == 0 for "no selection on this axis".
+func idSet(ids []string) map[string]struct{} {
+	if len(ids) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if id != "" {
+			set[id] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
 }

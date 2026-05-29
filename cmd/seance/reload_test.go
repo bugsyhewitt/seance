@@ -62,7 +62,7 @@ func TestReloadSignatures_SwapsRuleSet(t *testing.T) {
 
 	// Rewrite the same path with a two-rule set, then reload.
 	writeFile(t, dir, "sigs.toml", ghRuleTOML)
-	reloadSignatures(engine, path)
+	reloadSignatures(engine, path, nil, nil)
 
 	if engine.RuleCount() != 2 {
 		t.Errorf("after reload, rule count: got %d, want 2", engine.RuleCount())
@@ -80,7 +80,7 @@ func TestReloadSignatures_KeepsRulesOnParseError(t *testing.T) {
 
 	// Corrupt the file with invalid TOML.
 	writeFile(t, dir, "sigs.toml", "this is = = not valid toml [[[")
-	reloadSignatures(engine, path)
+	reloadSignatures(engine, path, nil, nil)
 
 	if engine.RuleCount() != 1 {
 		t.Errorf("after failed reload, rule count: got %d, want 1 (rules must be preserved)", engine.RuleCount())
@@ -99,7 +99,7 @@ func TestReloadSignatures_KeepsRulesOnMissingFile(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	reloadSignatures(engine, path)
+	reloadSignatures(engine, path, nil, nil)
 
 	if engine.RuleCount() != 1 {
 		t.Errorf("after reload of missing file, rule count: got %d, want 1", engine.RuleCount())
@@ -116,10 +116,52 @@ func TestReloadSignatures_SkipsEmptyRuleSet(t *testing.T) {
 	engine := scan.New(rs.Rules)
 
 	writeFile(t, dir, "sigs.toml", emptyTOML)
-	reloadSignatures(engine, path)
+	reloadSignatures(engine, path, nil, nil)
 
 	if engine.RuleCount() != 1 {
 		t.Errorf("after reload of empty rule set, rule count: got %d, want 1 (must keep prior rules)", engine.RuleCount())
+	}
+}
+
+// TestReloadSignatures_ReappliesRuleSelection verifies that a SIGHUP hot-reload
+// re-applies the operator's --disable-rule selection: after reloading a
+// two-rule file with one rule disabled, only the surviving rule is active.
+func TestReloadSignatures_ReappliesRuleSelection(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "sigs.toml", awsRuleTOML)
+
+	rs, _ := ruleset.LoadFile(path)
+	engine := scan.New(rs.Rules)
+
+	// Reload a two-rule set, but disable one of them; only one should survive.
+	writeFile(t, dir, "sigs.toml", ghRuleTOML)
+	reloadSignatures(engine, path, nil, []string{"github-oauth"})
+
+	if engine.RuleCount() != 1 {
+		t.Errorf("after reload with --disable-rule, rule count: got %d, want 1", engine.RuleCount())
+	}
+}
+
+// TestReloadSignatures_KeepsRulesWhenSelectionEmptiesSet verifies that if the
+// operator's selection no longer matches any rule in the reloaded file, the
+// previously active rules are preserved — a reload must never silence a monitor.
+func TestReloadSignatures_KeepsRulesWhenSelectionEmptiesSet(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "sigs.toml", awsRuleTOML)
+
+	rs, _ := ruleset.LoadFile(path)
+	engine := scan.New(rs.Rules)
+	if engine.RuleCount() != 1 {
+		t.Fatalf("initial rule count: got %d, want 1", engine.RuleCount())
+	}
+
+	// Reload a file whose rule IDs are not on the enable allowlist — selection
+	// empties the set, so the prior rule must be kept.
+	writeFile(t, dir, "sigs.toml", ghRuleTOML)
+	reloadSignatures(engine, path, []string{"aws-access-key-id"}, nil)
+
+	if engine.RuleCount() != 1 {
+		t.Errorf("after selection emptied the reloaded set, rule count: got %d, want 1 (must keep prior rules)", engine.RuleCount())
 	}
 }
 
@@ -135,7 +177,7 @@ func TestReloadSignatures_LoadsRealDefaultSet(t *testing.T) {
 	if engine.RuleCount() != 0 {
 		t.Fatalf("expected empty engine, got %d rules", engine.RuleCount())
 	}
-	reloadSignatures(engine, path)
+	reloadSignatures(engine, path, nil, nil)
 	if engine.RuleCount() == 0 {
 		t.Error("reloading the default ruleset should load at least one rule")
 	}

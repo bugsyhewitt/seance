@@ -74,6 +74,30 @@ func TestMergeConfig_NoFlagsKeepsFile(t *testing.T) {
 	}
 }
 
+// TestMergeConfig_RuleSelectionFlagsBeatFile verifies the enable/disable rule
+// flags follow the same defaults < file < flags precedence: an explicitly-set
+// --disable-rule wins over the file, while a file's enable_rules survives when
+// --enable-rule is not passed on the CLI.
+func TestMergeConfig_RuleSelectionFlagsBeatFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.EnableRules = []string{"aws-access-key-id"}
+	fileCfg.DisableRules = []string{"generic-api-key"}
+
+	parsed := config.Defaults()
+	parsed.EnableRules = []string{"should-not-win"}     // operator did NOT pass --enable-rule
+	parsed.DisableRules = []string{"stripe-secret-key"} // operator passed --disable-rule
+
+	// Only disable-rule was set on the CLI.
+	got := mergeConfig(fileCfg, parsed, map[string]bool{"disable-rule": true})
+
+	if !reflect.DeepEqual(got.DisableRules, []string{"stripe-secret-key"}) {
+		t.Errorf("DisableRules = %v, want the flag value (flag overrides file)", got.DisableRules)
+	}
+	if !reflect.DeepEqual(got.EnableRules, []string{"aws-access-key-id"}) {
+		t.Errorf("EnableRules = %v, want the file value (no flag set)", got.EnableRules)
+	}
+}
+
 // TestApplyConfigFile_EndToEnd drives the real cobra command with a --config
 // file and an overriding flag, exercising the full PersistentPreRunE path and
 // the package globals it mutates.

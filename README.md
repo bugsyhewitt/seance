@@ -767,6 +767,60 @@ silently disables detection), and `seance rules validate` (see
 [Rule validation](#validating-a-ruleset-seance-rules-validate)) flags the out-of-range value at edit time so
 the author learns the override is doing nothing.
 
+### Selecting rules (`--enable-rule` / `--disable-rule`)
+
+Allowlists and per-rule `confidence` tune a rule *at authoring time*, by editing
+the signatures file. But the signatures file is often **shared** — the shipped
+`signatures/default.toml`, a team's vendored ruleset, a community file you pull
+in unchanged. When one rule in that shared file is too noisy for *your*
+deployment (the `generic-api-key` catch-all is the usual suspect), you shouldn't
+have to fork the file to silence it. `--enable-rule` and `--disable-rule` turn an
+individual rule on or off **by ID, at deploy time, without touching the
+signatures TOML** — the gitleaks `--enable-rule` / `--disable-rule` analogue.
+
+```bash
+# Drop one noisy rule from the loaded ruleset; everything else still runs.
+seance --disable-rule generic-api-key
+
+# Run ONLY the two rules you care about (everything else is dropped).
+seance --enable-rule aws-access-key-id --enable-rule aws-secret-access-key
+
+# Combine: run only the AWS rules, but drop one of them.
+seance --enable-rule aws-access-key-id --enable-rule aws-secret-access-key \
+       --disable-rule aws-secret-access-key
+```
+
+Semantics (matching gitleaks):
+
+- **`--enable-rule` is an allowlist.** When you pass it (repeatable), *only* the
+  listed rule IDs survive — every other loaded rule is dropped. Omit it (the
+  default) and all loaded rules run.
+- **`--disable-rule` is a denylist** (repeatable), applied *after* `--enable-rule`.
+  Any listed ID is removed from whatever survived. **`--disable-rule` always wins
+  over `--enable-rule`**, so an ID in both is dropped.
+- Matching is **case-insensitive** on the rule ID, and surrounding whitespace is
+  trimmed. An ID that matches no rule is a harmless no-op (no error).
+- Both flags carry over the [config file](#configuration-file---config) as
+  `enable_rules` / `disable_rules` arrays, and follow the same
+  defaults < file < flags precedence as every other flag.
+
+Selection is **re-applied on every [SIGHUP hot-reload](#hot-reload-sighup)**, so a
+long-running monitor keeps honouring your enable/disable choice even after the
+signatures file changes underneath it. And it is **fail-safe**: if a selection
+leaves *zero* active rules — at startup it aborts with a clear error; on a
+hot-reload it logs and keeps the previously active rules — so a typo'd rule ID
+can never silently disable the monitor.
+
+This composes with the authoring-time controls rather than replacing them: use
+allowlists and `confidence` to shape a rule's behaviour in a file you own, and
+`--enable-rule` / `--disable-rule` to select which rules from a shared file run
+in *this* deployment.
+
+| Flag | Description |
+|------|-------------|
+| `--enable-rule ID` | Run *only* the listed rule IDs; every other loaded rule is dropped (allowlist). Repeatable. Empty (default) runs all rules. |
+| `--disable-rule ID` | Drop the listed rule IDs from the loaded ruleset (denylist). Repeatable. Applied after `--enable-rule` and always wins over it. |
+
 ### Global placeholder / dummy-value filter (always on)
 
 Documentation samples, tutorial stand-ins, and manual masks are the single
