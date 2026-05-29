@@ -230,6 +230,14 @@ func runPipeline(ctx context.Context, c config.Config) error {
 				}
 				fmt.Fprintf(os.Stderr, "séance: search-api committer-date scoped to %s\n", describeWatchWindow(c.WatchSince, c.WatchUntil))
 			}
+			// Optional cadence override (applies only to the search provider). A
+			// value below the provider's floor is clamped up there with its own
+			// warning; we report the effective interval so the operator can confirm
+			// what séance actually settled on.
+			if c.WatchIntervalSec > 0 {
+				effective := searchProv.SetPollInterval(time.Duration(c.WatchIntervalSec) * time.Second)
+				fmt.Fprintf(os.Stderr, "séance: search-api poll cadence set to %s\n", effective)
+			}
 			fmt.Fprintf(os.Stderr, "séance: search-api monitoring enabled — watching %d keyword(s) via GET /search/commits\n", len(kw))
 		} else {
 			searchProv = nil // every keyword was blank

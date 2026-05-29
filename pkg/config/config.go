@@ -46,6 +46,19 @@ type Config struct {
 	WatchSince string `toml:"watch_since" yaml:"watch_since"`
 	WatchUntil string `toml:"watch_until" yaml:"watch_until"`
 
+	// WatchIntervalSec tunes the normal cadence, in seconds, between full sweeps
+	// of the --watch keyword list by the Search-API provider. It applies ONLY to
+	// the search provider — the global events stream uses PollIntervalSec — and
+	// has no effect unless --watch keywords are configured. 0 (the default) keeps
+	// the provider's built-in 90s cadence, which is conservative for a
+	// multi-keyword watch list. A single-keyword targeted investigation can poll
+	// faster; a background monitor sharing a token may prefer to poll slower to
+	// conserve the 30 req/min Search-API quota. Values below the provider's 10s
+	// floor are clamped up (with a stderr warning) so a too-eager interval cannot
+	// trap séance in perpetual rate-limit backoff. The separate low-budget backoff
+	// cadence is unaffected, so tuning this never weakens the quota protection.
+	WatchIntervalSec int `toml:"watch_interval_sec" yaml:"watch_interval_sec"`
+
 	// Pre-filter
 	MaxFilesPerCommit int `toml:"max_files_per_commit" yaml:"max_files_per_commit"`
 

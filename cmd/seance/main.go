@@ -104,6 +104,8 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.WatchSince = parsed.WatchSince
 		case "watch-until":
 			out.WatchUntil = parsed.WatchUntil
+		case "watch-interval":
+			out.WatchIntervalSec = parsed.WatchIntervalSec
 		case "force-push":
 			out.ForcePush = parsed.ForcePush
 		case "suppress-file":
@@ -143,6 +145,7 @@ func init() {
 	rootCmd.PersistentFlags().StringArrayVar(&cfg.Watch, "watch", cfg.Watch, "keyword to monitor via the GitHub commit Search API for targeted/org-scoped coverage, e.g. --watch acme-corp (repeatable); runs alongside the global events stream, empty disables it")
 	rootCmd.PersistentFlags().StringVar(&cfg.WatchSince, "watch-since", cfg.WatchSince, "scope --watch search results to commits with a committer-date on or after this date (YYYY-MM-DD); applies only to the search provider; empty leaves the search corpus unscoped")
 	rootCmd.PersistentFlags().StringVar(&cfg.WatchUntil, "watch-until", cfg.WatchUntil, "scope --watch search results to commits with a committer-date on or before this date (YYYY-MM-DD); applies only to the search provider; empty leaves the search corpus unscoped")
+	rootCmd.PersistentFlags().IntVar(&cfg.WatchIntervalSec, "watch-interval", cfg.WatchIntervalSec, "poll cadence in seconds for the --watch Search-API provider (the targeted/org-scoped axis); applies only to --watch, not the global events stream (--poll-interval); 0 keeps the conservative 90s default; values below 10s are clamped up to protect the 30 req/min Search-API quota")
 	rootCmd.PersistentFlags().BoolVar(&cfg.ForcePush, "force-push", cfg.ForcePush, "detect force-push history rewrites and scan the orphaned diff (one extra compare request per force-push)")
 	rootCmd.PersistentFlags().StringVar(&cfg.SuppressFile, "suppress-file", cfg.SuppressFile, "path to a newline-delimited list of finding fingerprints to always ignore (the .gitleaksignore analogue); '#' comments allowed")
 	rootCmd.PersistentFlags().Float64Var(&cfg.MinConfidence, "min-confidence", cfg.MinConfidence, "global confidence floor (0.0-1.0): drop findings below this score before they reach ANY sink (stdout, --output-file, --sarif-file, --tui, webhook); 0 emits everything; raise it to surface only high-confidence findings")

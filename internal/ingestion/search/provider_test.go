@@ -339,3 +339,88 @@ func TestProvider_SurfacesHTTPError(t *testing.T) {
 		t.Fatal("expected an error for a 403 response, got nil")
 	}
 }
+
+// TestProvider_SetPollInterval_Override verifies that a positive interval above
+// the floor is applied verbatim to the provider's normal cadence and returned as
+// the effective value.
+func TestProvider_SetPollInterval_Override(t *testing.T) {
+	p := searchprovider.New("", "acme-corp")
+	want := 30 * time.Second
+	got := p.SetPollInterval(want)
+	if got != want {
+		t.Fatalf("SetPollInterval(%s) returned %s, want %s", want, got, want)
+	}
+	if p.PollInterval != want {
+		t.Fatalf("PollInterval = %s, want %s", p.PollInterval, want)
+	}
+}
+
+// TestProvider_SetPollInterval_ClampsBelowFloor verifies that a too-eager
+// interval is clamped up to the 10s floor (protecting the Search-API quota)
+// rather than honored, and that the clamped value is returned.
+func TestProvider_SetPollInterval_ClampsBelowFloor(t *testing.T) {
+	p := searchprovider.New("", "acme-corp")
+	got := p.SetPollInterval(2 * time.Second)
+	want := 10 * time.Second
+	if got != want {
+		t.Fatalf("SetPollInterval(2s) returned %s, want clamp to %s", got, want)
+	}
+	if p.PollInterval != want {
+		t.Fatalf("PollInterval = %s, want clamped %s", p.PollInterval, want)
+	}
+}
+
+// TestProvider_SetPollInterval_ZeroIsNoOp verifies that a zero or negative
+// interval leaves the provider's existing (default) cadence untouched, so an
+// unset --watch-interval changes nothing.
+func TestProvider_SetPollInterval_ZeroIsNoOp(t *testing.T) {
+	p := searchprovider.New("", "acme-corp")
+	before := p.PollInterval
+	if got := p.SetPollInterval(0); got != before {
+		t.Fatalf("SetPollInterval(0) returned %s, want unchanged %s", got, before)
+	}
+	if p.PollInterval != before {
+		t.Fatalf("PollInterval = %s after no-op, want %s", p.PollInterval, before)
+	}
+	if got := p.SetPollInterval(-5 * time.Second); got != before {
+		t.Fatalf("SetPollInterval(-5s) returned %s, want unchanged %s", got, before)
+	}
+	if p.PollInterval != before {
+		t.Fatalf("PollInterval = %s after negative no-op, want %s", p.PollInterval, before)
+	}
+}
+
+// TestProvider_SetPollInterval_GovernsCadence verifies the override actually
+// drives how often the provider polls: with a short interval it sweeps the
+// keyword list multiple times inside a fixed window.
+func TestProvider_SetPollInterval_GovernsCadence(t *testing.T) {
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		w.Header().Set("X-RateLimit-Remaining", "100")
+		w.Write([]byte(`{"items":[]}`))
+	}))
+	defer srv.Close()
+
+	p := searchprovider.NewWithBaseURL("", srv.URL, "acme-corp")
+	// Exercise the override path with a value above the 10s floor so it is
+	// honored verbatim, proving SetPollInterval drives p.PollInterval...
+	if got := p.SetPollInterval(15 * time.Second); got != 15*time.Second {
+		t.Fatalf("SetPollInterval(15s) = %s, want 15s", got)
+	}
+	// ...then assign the field directly to keep the actual loop fast for the test.
+	p.PollInterval = 20 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	events, errs := p.Stream(ctx)
+	go func() {
+		for range events {
+		}
+	}()
+	for range errs {
+	}
+	if n := atomic.LoadInt64(&hits); n < 2 {
+		t.Fatalf("expected multiple polls in the window, got %d", n)
+	}
+}

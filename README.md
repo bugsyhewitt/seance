@@ -146,6 +146,31 @@ is unaffected. An invalid date, or a `--watch-since` later than `--watch-until`,
 fails the run loudly rather than silently returning an unscoped firehose. Leaving
 both unset preserves the prior behavior (the search corpus is unscoped).
 
+### Tuning the search cadence (`--watch-interval`)
+
+The `--watch` search provider polls every **90 seconds** by default — a cadence
+chosen to keep a multi-keyword watch list comfortably inside the Search API's
+strict authenticated quota (30 requests/minute), since each poll issues one
+request *per keyword*. `--watch-interval` lets you tune that cadence in seconds:
+
+```bash
+# A single-keyword targeted investigation — poll faster for lower latency.
+seance --watch acme-corp --watch-interval 20
+
+# A long-running background monitor sharing a token — poll slower to leave
+# Search-API budget for other clients.
+seance --watch acme-corp --watch internal.example.com --watch-interval 300
+```
+
+This applies **only** to the `--watch` search provider; the global events stream
+keeps its own cadence (`--poll-interval`). Values below a **10-second floor** are
+clamped up — with a one-line stderr warning — because polling faster would burn
+the 30 req/min quota almost immediately and trap séance in perpetual rate-limit
+backoff. `0` (the default) keeps the conservative 90s cadence. The separate
+low-budget backoff and two-way rate-limit recovery are unchanged, so tuning the
+interval never weakens séance's quota protection. The override has no effect when
+`--watch` is not configured.
+
 ---
 
 ## Install
@@ -213,6 +238,10 @@ seance --watch acme-corp --watch internal.example.com
 seance --watch acme-corp --watch-since 2026-05-22
 seance --watch acme-corp --watch-since 2026-01-01 --watch-until 2026-03-01
 
+# Tune the --watch search cadence (seconds). Default 90s; values below 10s are
+# clamped up to protect the 30 req/min Search-API quota. Events stream unaffected.
+seance --watch acme-corp --watch-interval 20
+
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'
 
@@ -272,8 +301,9 @@ force_push        = true
 min_confidence    = 0.7              # global floor before any sink
 
 # Targeted/org-scoped monitoring (alongside the global events stream)
-watch             = ["acme-corp", "internal.example.com"]
-watch_since       = "2026-01-01"
+watch              = ["acme-corp", "internal.example.com"]
+watch_since        = "2026-01-01"
+watch_interval_sec = 90              # --watch poll cadence; 0 keeps the default
 
 # Durable record + live feed
 tui               = true
