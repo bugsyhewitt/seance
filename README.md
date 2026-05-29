@@ -299,6 +299,8 @@ environment variable — the env var still applies on top of the file.
 poll_interval_sec = 30
 force_push        = true
 min_confidence    = 0.7              # global floor before any sink
+include_tags      = ["aws", "gcp"]   # only these credential classes reach any sink
+exclude_tags      = ["generic"]      # drop this class everywhere (wins over include)
 
 # Targeted/org-scoped monitoring (alongside the global events stream)
 watch              = ["acme-corp", "internal.example.com"]
@@ -752,6 +754,49 @@ dropped, so the trade-off is observable.
 > applied *on top of* the floor. Use the floor to set a baseline for all output and
 > the webhook gate to page on an even higher bar.
 
+### Tag filter (`--tag` / `--exclude-tag`)
+
+The confidence floor narrows the firehose *by score*; the tag filter narrows it
+*by credential class*. Every finding carries the `tags` of the rule that matched
+it (see [Output format](#output-format)) — `aws`, `cloud`, `generic`, and so on.
+`--tag` and `--exclude-tag` are the categorical complement to `--min-confidence`:
+an engine-wide filter that decides which classes reach **any** sink, so
+stdout/NDJSON, `--output-file`, `--sarif-file`, `--tui`, and the webhook all see
+the identical filtered set.
+
+```bash
+# Only hunt cloud keys — drop every other class everywhere at once.
+seance --tag aws --tag gcp
+
+# Keep the whole firehose except the noisy generic catch-all.
+seance --exclude-tag generic
+
+# Compose with the confidence floor: a finding must clear BOTH gates to emit.
+seance --tag aws --min-confidence 0.85
+```
+
+| Flag | Description |
+|------|-------------|
+| `--tag` | Include only findings whose rule carries this tag (repeatable, case-insensitive). When set, every finding *without* a listed tag is dropped before any sink. Defaults to empty (all classes included). |
+| `--exclude-tag` | Drop findings whose rule carries this tag (repeatable, case-insensitive). Applied across every sink. Defaults to empty (nothing excluded). |
+
+- **Matching is case-insensitive** and surrounding whitespace is trimmed, so
+  `--tag AWS` matches a rule tagged `aws`.
+- **`--exclude-tag` wins over `--tag`.** A tag named on both lists drops the
+  finding — exclude is the stronger statement.
+- The filter is applied **after** the confidence floor and **before** dedup and
+  the sink fan-out, so a tag-dropped finding never consumes a dedup slot and never
+  reaches output. The never-store-raw invariant holds on the drop path (nothing is
+  emitted at all).
+- The `findings_tag_filtered_total` metric counts how many findings the tag filter
+  dropped, so the trade-off is observable alongside `findings_below_confidence_total`.
+
+> **Filter vs. rule selection.** `--tag`/`--exclude-tag` filter *findings* by their
+> class at output time; `--enable-rule`/`--disable-rule`
+> ([Selecting rules](#selecting-rules---enable-rule----disable-rule)) turn whole
+> rules on or off by ID before scanning. Use rule selection to control *what runs*,
+> the tag filter to control *which classes surface* from what ran.
+
 ---
 
 ## Signatures
@@ -1143,7 +1188,8 @@ Live metrics are written to stderr every 60 s in `key=value` format:
 séance metrics ts=1234567890 push_events_total=454 force_pushes_total=3 \
   prefilter_passed_total=405 prefilter_dropped_total=49 fetches_total=405 \
   polls_total=17 findings_total=0 findings_suppressed_total=2 \
-  findings_below_confidence_total=4 placeholders_dropped_total=11 \
+  findings_below_confidence_total=4 findings_tag_filtered_total=7 \
+  placeholders_dropped_total=11 \
   seen_commits_tracked=412 seen_findings_tracked=6 \
   push_events_hr=1602.3 prefilter_survival_pct=89.2 fetches_hr=1429.3 \
   polls_hr=60.0 rate_limit_remaining=4592 rate_limit_reset_in=1981
@@ -1166,6 +1212,11 @@ persistent fingerprint set — both bounded by the same TTL (see
 `--min-confidence` floor before they reached any sink (see
 [Confidence floor](#confidence-floor---min-confidence)). It stays at `0` unless a
 floor is set.
+
+`findings_tag_filtered_total` counts findings dropped by the `--tag`/`--exclude-tag`
+categorical filter before they reached any sink (see
+[Tag filter](#tag-filter---tag----exclude-tag)). It stays at `0` unless a tag
+filter is set.
 
 `placeholders_dropped_total` counts matches dropped by the global
 placeholder/dummy-value filter — documentation samples, masks, and `your_key`

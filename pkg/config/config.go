@@ -100,6 +100,22 @@ type Config struct {
 	// is applied on top of this engine-wide floor.
 	MinConfidence float64 `toml:"min_confidence" yaml:"min_confidence"`
 
+	// IncludeTags and ExcludeTags are a categorical output filter on a finding's
+	// rule tags — the credential-class complement to the numeric MinConfidence
+	// floor. When IncludeTags is non-empty, only findings whose rule carries at
+	// least one of the listed tags reach ANY sink (stdout/NDJSON, --output-file,
+	// --sarif-file, --tui, the webhook); every other finding is dropped before the
+	// dedup/sink fan-out. ExcludeTags drops any finding whose rule carries a listed
+	// tag. When a tag appears on both lists, ExcludeTags wins. Matching is
+	// case-insensitive. Both empty (the default) impose no tag filtering —
+	// byte-for-byte the prior behavior. This lets an operator narrow a firehose to
+	// just the classes they hunt (e.g. --tag aws,gcp) or silence a noisy class
+	// (e.g. --exclude-tag generic) across every sink at once, without editing the
+	// ruleset. Applied on top of, and independently from, MinConfidence: a finding
+	// must clear both gates to emit.
+	IncludeTags []string `toml:"include_tags" yaml:"include_tags"`
+	ExcludeTags []string `toml:"exclude_tags" yaml:"exclude_tags"`
+
 	// State
 	StateDir    string `toml:"state_dir" yaml:"state_dir"`
 	SeenTTLDays int    `toml:"seen_ttl_days" yaml:"seen_ttl_days"`

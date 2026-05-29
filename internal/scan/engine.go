@@ -57,6 +57,22 @@ type Engine struct {
 	// belowConfidence counts candidate findings dropped by the minConfidence
 	// floor. Read atomically for the findings_below_confidence_total metric.
 	belowConfidence uint64
+
+	// includeTags, when non-empty, restricts output to findings carrying at least
+	// one of these tags — every finding without a listed tag is dropped before the
+	// sink fan-out. excludeTags drops any finding carrying at least one of these
+	// tags. Both are matched case-insensitively against the finding's rule tags.
+	// Exclude wins over include when a tag appears on both lists. Empty lists (the
+	// default) impose no tag filtering, leaving behavior unchanged. Both are fixed
+	// for the life of the engine. This is the categorical complement to the numeric
+	// minConfidence floor: confidence trades recall for precision by score, the tag
+	// filter trades it by credential class.
+	includeTags map[string]struct{}
+	excludeTags map[string]struct{}
+
+	// tagFiltered counts candidate findings dropped by the include/exclude tag
+	// filter. Read atomically for the findings_tag_filtered_total metric.
+	tagFiltered uint64
 }
 
 // Suppressor decides whether a finding should be suppressed (not emitted) on the
@@ -111,10 +127,81 @@ func (e *Engine) WithMinConfidence(threshold float64) *Engine {
 	return e
 }
 
+// WithTagFilter returns the engine with a categorical tag filter installed.
+//
+// include, when non-empty, admits only findings whose rule carries at least one
+// of the listed tags; every other finding is dropped before the dedup/sink
+// fan-out, so every configured sink — stdout, file, SARIF, TUI, and webhook —
+// sees only the selected credential classes. exclude drops any finding whose
+// rule carries at least one of the listed tags. When both lists name the same
+// tag, exclude wins (a finding carrying it is dropped). Matching is
+// case-insensitive and tags are trimmed of surrounding whitespace; empty entries
+// are ignored. Passing two empty lists (the default) imposes no tag filtering,
+// leaving behavior byte-for-byte unchanged. Intended to be called once at
+// construction, before Scan runs. The tag filter is applied after the
+// minConfidence floor and before fingerprinting/dedup, so a tag-dropped finding
+// never reaches any sink and never consumes a dedup slot.
+func (e *Engine) WithTagFilter(include, exclude []string) *Engine {
+	e.includeTags = normalizeTagSet(include)
+	e.excludeTags = normalizeTagSet(exclude)
+	return e
+}
+
+// normalizeTagSet lower-cases, trims, and de-duplicates a tag list into a set,
+// dropping empty entries. Returns nil for an effectively-empty input so callers
+// can cheaply test "no filter" with a len()==0 / nil check.
+func normalizeTagSet(tags []string) map[string]struct{} {
+	if len(tags) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(tags))
+	for _, t := range tags {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" {
+			continue
+		}
+		set[t] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// tagFilterDrops reports whether a finding's tags cause it to be dropped by the
+// configured include/exclude tag filter. A finding is dropped when (a) an exclude
+// set is configured and the finding carries any excluded tag, or (b) an include
+// set is configured and the finding carries none of the included tags. With both
+// sets empty nothing is ever dropped.
+func (e *Engine) tagFilterDrops(tags []string) bool {
+	if len(e.excludeTags) > 0 {
+		for _, t := range tags {
+			if _, bad := e.excludeTags[strings.ToLower(strings.TrimSpace(t))]; bad {
+				return true
+			}
+		}
+	}
+	if len(e.includeTags) > 0 {
+		for _, t := range tags {
+			if _, ok := e.includeTags[strings.ToLower(strings.TrimSpace(t))]; ok {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // SuppressedCount returns the cumulative number of findings dropped by the
 // suppressor. Used for the findings_suppressed_total metric.
 func (e *Engine) SuppressedCount() uint64 {
 	return atomic.LoadUint64(&e.suppressed)
+}
+
+// TagFilteredCount returns the cumulative number of findings dropped by the
+// include/exclude tag filter. Used for the findings_tag_filtered_total metric.
+func (e *Engine) TagFilteredCount() uint64 {
+	return atomic.LoadUint64(&e.tagFiltered)
 }
 
 // BelowConfidenceCount returns the cumulative number of findings dropped by the
@@ -237,6 +324,18 @@ func (e *Engine) Scan(ctx context.Context, content fetch.FileContent) (int, erro
 				// independent MinConfidence for finer per-channel tuning above this.
 				if confidence < e.minConfidence {
 					atomic.AddUint64(&e.belowConfidence, 1)
+					continue
+				}
+
+				// Categorical tag filter (--tag / --exclude-tag): admit only the
+				// credential classes the operator cares about (or drop classes they
+				// don't), evaluated on the rule's tags before fingerprinting and the
+				// sink fan-out — so a filtered finding never reaches ANY sink and never
+				// consumes a dedup slot. With no tag lists configured this is a no-op.
+				// It is the categorical complement to the numeric --min-confidence
+				// floor and composes with it: a finding must clear both gates to emit.
+				if e.tagFilterDrops(rule.Tags) {
+					atomic.AddUint64(&e.tagFiltered, 1)
 					continue
 				}
 

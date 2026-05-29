@@ -98,6 +98,29 @@ func TestMergeConfig_RuleSelectionFlagsBeatFile(t *testing.T) {
 	}
 }
 
+// TestMergeConfig_TagFilterFlagsBeatFile verifies the categorical tag-filter
+// flags follow the defaults < file < flags precedence: a CLI --exclude-tag wins
+// over the file, while a file's include_tags survives when --tag is not passed.
+func TestMergeConfig_TagFilterFlagsBeatFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.IncludeTags = []string{"aws"}
+	fileCfg.ExcludeTags = []string{"generic"}
+
+	parsed := config.Defaults()
+	parsed.IncludeTags = []string{"should-not-win"} // operator did NOT pass --tag
+	parsed.ExcludeTags = []string{"test-fixture"}   // operator passed --exclude-tag
+
+	// Only exclude-tag was set on the CLI.
+	got := mergeConfig(fileCfg, parsed, map[string]bool{"exclude-tag": true})
+
+	if !reflect.DeepEqual(got.ExcludeTags, []string{"test-fixture"}) {
+		t.Errorf("ExcludeTags = %v, want the flag value (flag overrides file)", got.ExcludeTags)
+	}
+	if !reflect.DeepEqual(got.IncludeTags, []string{"aws"}) {
+		t.Errorf("IncludeTags = %v, want the file value (no flag set)", got.IncludeTags)
+	}
+}
+
 // TestMergeConfig_OutputMaxBytesFlagBeatsFile verifies --output-max-bytes follows
 // the defaults < file < flags precedence and that the file value survives when the
 // flag is not set on the CLI.

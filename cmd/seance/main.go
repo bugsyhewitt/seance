@@ -114,6 +114,10 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.SuppressFile = parsed.SuppressFile
 		case "min-confidence":
 			out.MinConfidence = parsed.MinConfidence
+		case "tag":
+			out.IncludeTags = parsed.IncludeTags
+		case "exclude-tag":
+			out.ExcludeTags = parsed.ExcludeTags
 		case "webhook-url":
 			out.WebhookURL = parsed.WebhookURL
 		case "webhook-header":
@@ -152,6 +156,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&cfg.ForcePush, "force-push", cfg.ForcePush, "detect force-push history rewrites and scan the orphaned diff (one extra compare request per force-push)")
 	rootCmd.PersistentFlags().StringVar(&cfg.SuppressFile, "suppress-file", cfg.SuppressFile, "path to a newline-delimited list of finding fingerprints to always ignore (the .gitleaksignore analogue); '#' comments allowed")
 	rootCmd.PersistentFlags().Float64Var(&cfg.MinConfidence, "min-confidence", cfg.MinConfidence, "global confidence floor (0.0-1.0): drop findings below this score before they reach ANY sink (stdout, --output-file, --sarif-file, --tui, webhook); 0 emits everything; raise it to surface only high-confidence findings")
+	rootCmd.PersistentFlags().StringArrayVar(&cfg.IncludeTags, "tag", cfg.IncludeTags, "include only findings whose rule carries this tag (repeatable, case-insensitive), e.g. --tag aws --tag gcp; when set, every finding without a listed tag is dropped before it reaches ANY sink; the categorical complement to --min-confidence; empty includes all classes")
+	rootCmd.PersistentFlags().StringArrayVar(&cfg.ExcludeTags, "exclude-tag", cfg.ExcludeTags, "drop findings whose rule carries this tag (repeatable, case-insensitive), e.g. --exclude-tag generic; applied across ANY sink; wins over --tag when a tag is on both lists; empty excludes nothing")
 	rootCmd.PersistentFlags().StringVar(&cfg.WebhookURL, "webhook-url", cfg.WebhookURL, "POST each finding (redacted) as JSON to this URL; empty disables the webhook sink")
 	rootCmd.PersistentFlags().StringArrayVar(&cfg.WebhookHeaders, "webhook-header", cfg.WebhookHeaders, "header added to every webhook POST as KEY:VALUE (repeatable, e.g. Authorization:Bearer xyz)")
 	rootCmd.PersistentFlags().Float64Var(&cfg.WebhookMinConfidence, "webhook-min-confidence", cfg.WebhookMinConfidence, "only POST findings with confidence at or above this threshold (0.0-1.0)")
