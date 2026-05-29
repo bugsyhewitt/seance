@@ -98,6 +98,29 @@ func TestMergeConfig_RuleSelectionFlagsBeatFile(t *testing.T) {
 	}
 }
 
+// TestMergeConfig_OutputMaxBytesFlagBeatsFile verifies --output-max-bytes follows
+// the defaults < file < flags precedence and that the file value survives when the
+// flag is not set on the CLI.
+func TestMergeConfig_OutputMaxBytesFlagBeatsFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.OutputMaxBytes = 1 << 20 // 1 MiB from the file
+
+	parsed := config.Defaults()
+	parsed.OutputMaxBytes = 5 << 20 // operator passed --output-max-bytes 5MiB
+
+	// Flag set: it wins.
+	got := mergeConfig(fileCfg, parsed, map[string]bool{"output-max-bytes": true})
+	if got.OutputMaxBytes != 5<<20 {
+		t.Errorf("OutputMaxBytes = %d, want 5MiB (flag overrides file)", got.OutputMaxBytes)
+	}
+
+	// Flag not set: the file value survives.
+	got = mergeConfig(fileCfg, parsed, map[string]bool{})
+	if got.OutputMaxBytes != 1<<20 {
+		t.Errorf("OutputMaxBytes = %d, want 1MiB (file value survives)", got.OutputMaxBytes)
+	}
+}
+
 // TestApplyConfigFile_EndToEnd drives the real cobra command with a --config
 // file and an overriding flag, exercising the full PersistentPreRunE path and
 // the package globals it mutates.

@@ -99,12 +99,22 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	// OutputPath defaults to "-" (stdout, handled by the primary sink); any other
 	// value names a real file. Append-mode, so a restart extends the record.
 	if c.OutputPath != "" && c.OutputPath != "-" {
-		fileSink, ferr := outfile.New(c.OutputPath)
+		// Optional size-based rotation (--output-max-bytes). A negative value is a
+		// typo, not a smaller-than-zero file, so fail loudly rather than silently
+		// disabling rotation. 0 keeps the append-forever behaviour.
+		if c.OutputMaxBytes < 0 {
+			return fmt.Errorf("output-max-bytes must be >= 0, got %d", c.OutputMaxBytes)
+		}
+		fileSink, ferr := outfile.NewWithRotation(c.OutputPath, c.OutputMaxBytes)
 		if ferr != nil {
 			return fmt.Errorf("output file: %w", ferr)
 		}
 		sinks = append(sinks, fileSink)
-		fmt.Fprintf(os.Stderr, "séance: writing redacted NDJSON findings to %s\n", c.OutputPath)
+		if c.OutputMaxBytes > 0 {
+			fmt.Fprintf(os.Stderr, "séance: writing redacted NDJSON findings to %s (rotating at %d bytes)\n", c.OutputPath, c.OutputMaxBytes)
+		} else {
+			fmt.Fprintf(os.Stderr, "séance: writing redacted NDJSON findings to %s\n", c.OutputPath)
+		}
 	}
 
 	// Optional SARIF report sink. When --sarif-file is set, every finding is ALSO

@@ -6,6 +6,33 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Size-based rotation for `--output-file` (`--output-max-bytes`)** (output/file, config, cmd)
+- New `--output-max-bytes` flag (and `output_max_bytes` config key) bounds the
+  durable `--output-file` NDJSON record by rotating it in place — no external
+  logrotate required. séance's intended deployment is a run-forever monitor,
+  where the append-only output file otherwise grows until it fills the disk;
+  this closes that unbounded-growth gap for the one mode séance is built for.
+- When the active file would grow past the limit on the next finding, the file
+  is closed and renamed to `<file>.1`, older generations shift up
+  (`<file>.1` → `<file>.2`, …) keeping the **3 most recent** rotated generations,
+  and a fresh active file is opened. Total disk is therefore bounded to roughly
+  **4 × `--output-max-bytes`**.
+- Rotation happens **before** a line is written, so a finding is never split
+  across generations; a single finding larger than the whole budget is still
+  written intact (it lands in a fresh file rather than triggering an infinite
+  rotation loop). The threshold is measured against the file's real on-disk size
+  (seeded from the existing file at open), so a sink reopened on a near-full file
+  rotates on its first write instead of overshooting.
+- `0` (the default) disables rotation — byte-for-byte the prior append-forever
+  behaviour. A negative value is rejected at startup as a typo. The flag is
+  ignored unless `--output-file` names a real file (not stdout).
+- Tests: `internal/output/file/sink_test.go` adds disabled-by-default,
+  rotate-at-threshold, no-split/no-loss-across-generations, bounded-retention,
+  oversized-single-line, and seed-size-from-existing-file cases;
+  `cmd/seance/config_test.go` asserts the new flag follows defaults < file <
+  flags precedence. README documents the flag, an example, the rotation
+  mechanics, and the config-file key.
+
 **Tunable `--watch` search cadence (`--watch-interval`)** (ingestion/search, config, cmd)
 - New `--watch-interval` flag (and `watch_interval_sec` config key) tunes, in
   seconds, how often the `--watch` Search-API provider sweeps the keyword list.
