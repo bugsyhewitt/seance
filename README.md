@@ -245,6 +245,11 @@ seance --watch acme-corp --watch-interval 20
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'
 
+# CI gate: fail the build the moment a single finding lands. The cap is engine-
+# wide, so stdout, --output-file, --sarif-file, --tui, and the webhook all see
+# the same first-N findings, then séance shuts down cleanly (exit 0).
+seance --output-limit 1
+
 # Surface only high-confidence findings EVERYWHERE at once: --min-confidence is a
 # global floor applied before any sink, so stdout, --output-file, --sarif-file,
 # --tui, and the webhook all see only findings scoring at or above it. One dial to
@@ -311,6 +316,7 @@ watch_interval_sec = 90              # --watch poll cadence; 0 keeps the default
 tui               = true
 output_path       = "/var/log/seance/findings.ndjson"
 output_max_bytes  = 26214400          # rotate at 25 MiB; 0 appends forever
+output_limit      = 0                 # stop after N findings; 0 = unlimited (default)
 sarif_path        = "/var/log/seance/findings.sarif"
 
 # Real-time alerting
@@ -513,6 +519,53 @@ plus three retained generations). Notes:
   first write rather than overshooting.
 - **`0` (default) disables rotation** — byte-for-byte the prior append-forever
   behaviour. Negative values are rejected (a typo, not a tiny file).
+
+### Bounded run — finding cap (`--output-limit`)
+
+séance is built to run forever, but two real workflows want the opposite — a
+**bounded** run that stops after a fixed number of findings:
+
+- a **CI gate** that fails the build the moment a secret leaks (`--output-limit 1`),
+- a **research run** or **demo** that caps the firehose at, say, 100 findings
+  before exit.
+
+`--output-limit` is that cap, applied **engine-wide**:
+
+```bash
+# Stop the run after the first finding — a one-shot CI gate.
+seance --output-limit 1
+
+# Cap a research run at 100 findings, then exit cleanly.
+seance --output-limit 100 --output-file research.ndjson --sarif-file research.sarif
+```
+
+| Flag | Description |
+|------|-------------|
+| `--output-limit` | Stop the run after this many findings have been emitted across **all** sinks. `0` (default) imposes no cap. |
+
+Behavior and guarantees:
+
+- **Clean shutdown, not a hard abort.** When the cap is reached séance cancels
+  the run context the same way `SIGINT` does. The in-flight scan completes,
+  every sink's `Close` is honoured (so the buffered SARIF document is still
+  written and the webhook queue is still drained), and state — the seen-commit
+  set, the seen-finding fingerprints, the ETag — is persisted to `state.json`.
+  Exit status is **`0`**, like a normal SIGINT shutdown.
+- **Same first-N for every sink.** The cap is applied at the engine, *before*
+  the sink fan-out, so stdout/NDJSON, `--output-file`, `--sarif-file`, `--tui`,
+  and the webhook all see the **identical** first `N` findings. A downstream
+  consumer reading the SARIF report can never disagree with another reading the
+  NDJSON stream about which findings the run kept.
+- **Composes with every other filter.** It is applied **after** the confidence
+  floor, the tag filter, the placeholder filter, and the suppressor — so the
+  cap counts only findings that *would* have been alerts, not noise the engine
+  was going to drop anyway.
+- **Observable.** The stderr metrics line gains `findings_after_limit_total`,
+  which counts any extra findings that arrived after the cap was reached but
+  before the shutdown completed (typically a small handful from the in-flight
+  scan).
+- A negative value is rejected at startup (a typo, not a sub-zero cap); `0`
+  imposes no cap — byte-for-byte the prior behavior.
 
 ### SARIF report (`--sarif-file`)
 
@@ -1189,6 +1242,7 @@ séance metrics ts=1234567890 push_events_total=454 force_pushes_total=3 \
   prefilter_passed_total=405 prefilter_dropped_total=49 fetches_total=405 \
   polls_total=17 findings_total=0 findings_suppressed_total=2 \
   findings_below_confidence_total=4 findings_tag_filtered_total=7 \
+  findings_after_limit_total=0 \
   placeholders_dropped_total=11 \
   seen_commits_tracked=412 seen_findings_tracked=6 \
   push_events_hr=1602.3 prefilter_survival_pct=89.2 fetches_hr=1429.3 \
@@ -1217,6 +1271,11 @@ floor is set.
 categorical filter before they reached any sink (see
 [Tag filter](#tag-filter---tag----exclude-tag)). It stays at `0` unless a tag
 filter is set.
+
+`findings_after_limit_total` counts findings that arrived after the
+`--output-limit` cap was reached but before the shutdown completed (see
+[Bounded run](#bounded-run--finding-cap---output-limit)). It stays at `0` unless
+an output limit is set.
 
 `placeholders_dropped_total` counts matches dropped by the global
 placeholder/dummy-value filter — documentation samples, masks, and `your_key`

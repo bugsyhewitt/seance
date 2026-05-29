@@ -151,3 +151,28 @@ webhook_format = "slack"
 		t.Errorf("WebhookFormat = %q, want slack", got.WebhookFormat)
 	}
 }
+
+// TestLoad_OutputLimit verifies the output_limit TOML key decodes onto the
+// OutputLimit field — the config-file half of the --output-limit flag, used by
+// run-forever monitors that prefer a stable file to a long command line.
+func TestLoad_OutputLimit(t *testing.T) {
+	path := writeTemp(t, "limit.toml", `output_limit = 250`)
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.OutputLimit != 250 {
+		t.Errorf("OutputLimit = %d, want 250 (from file)", got.OutputLimit)
+	}
+
+	// An omitted key must keep the default (0 — no cap).
+	defPath := writeTemp(t, "default.toml", `# no output_limit set`)
+	defGot, err := Load(defPath)
+	if err != nil {
+		t.Fatalf("Load default: %v", err)
+	}
+	if defGot.OutputLimit != 0 {
+		t.Errorf("OutputLimit (omitted) = %d, want 0", defGot.OutputLimit)
+	}
+}

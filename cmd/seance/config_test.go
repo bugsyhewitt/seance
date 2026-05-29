@@ -192,6 +192,29 @@ state_dir = "/srv/seance-state"
 
 // TestApplyConfigFile_MissingFileErrors verifies a bad --config path fails the
 // command rather than silently running on defaults.
+// TestMergeConfig_OutputLimitFlagBeatsFile verifies --output-limit follows the
+// defaults < file < flags precedence and that the file value survives when the
+// flag is not set on the CLI.
+func TestMergeConfig_OutputLimitFlagBeatsFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.OutputLimit = 50 // 50 findings cap from the file
+
+	parsed := config.Defaults()
+	parsed.OutputLimit = 200 // operator passed --output-limit 200
+
+	// Flag set: it wins.
+	got := mergeConfig(fileCfg, parsed, map[string]bool{"output-limit": true})
+	if got.OutputLimit != 200 {
+		t.Errorf("OutputLimit = %d, want 200 (flag overrides file)", got.OutputLimit)
+	}
+
+	// Flag not set: the file value survives.
+	got = mergeConfig(fileCfg, parsed, map[string]bool{})
+	if got.OutputLimit != 50 {
+		t.Errorf("OutputLimit = %d, want 50 (file value survives)", got.OutputLimit)
+	}
+}
+
 func TestApplyConfigFile_MissingFileErrors(t *testing.T) {
 	origCfg, origPath := cfg, configPath
 	t.Cleanup(func() { cfg, configPath = origCfg, origPath })
