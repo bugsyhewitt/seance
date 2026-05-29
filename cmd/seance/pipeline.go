@@ -29,6 +29,7 @@ import (
 	"github.com/bugsyhewitt/seance/internal/scan"
 	"github.com/bugsyhewitt/seance/internal/scan/ruleset"
 	"github.com/bugsyhewitt/seance/internal/state"
+	"github.com/bugsyhewitt/seance/internal/throttle"
 	"github.com/bugsyhewitt/seance/pkg/config"
 )
 
@@ -248,8 +249,29 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 	}()
 
+	// Global outbound rate-limit (--rate-limit). Validated up front so a negative
+	// value (a typo, not a sub-zero cap) fails the run loudly rather than silently
+	// reverting to "no cap". When > 0 a single shared token-bucket limiter is
+	// constructed and installed on every séance HTTP surface (events provider,
+	// search provider, diff fetcher) so the rate cap is AGGREGATE across surfaces,
+	// not per-surface. The webhookrecv provider has no outbound HTTP and is
+	// therefore unaffected — inbound delivery latency must not depend on the
+	// outbound budget.
+	if c.RateLimit < 0 {
+		return fmt.Errorf("rate-limit must be >= 0, got %.2f", c.RateLimit)
+	}
+	var rateLimiter *throttle.Limiter
+	if c.RateLimit > 0 {
+		rateLimiter = throttle.New(c.RateLimit, 0)
+		fmt.Fprintf(os.Stderr, "séance: outbound rate-limit enabled — aggregate cap of %.2f req/s (burst %.0f) across events poller, search-api provider, and fetcher\n",
+			rateLimiter.Rate(), rateLimiter.Burst())
+	}
+
 	provider := ghprovider.NewWithBaseURL(c.GitHubToken, "https://api.github.com")
 	provider.DetectForcePush = c.ForcePush
+	if rateLimiter != nil {
+		provider.SetHTTPClient(throttle.Wrap(rateLimiter, nil))
+	}
 	// Resume conditional polling across restarts: seed the provider with the ETag
 	// persisted from the previous run so the first poll is an If-None-Match request
 	// (a cheap 304 when nothing new happened) instead of a full cold fetch. The
@@ -270,6 +292,9 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 	}()
 	fetcher := fetch.NewGitHubFetcher(c.GitHubToken, "https://api.github.com")
+	if rateLimiter != nil {
+		fetcher.SetHTTPClient(throttle.Wrap(rateLimiter, nil))
+	}
 	if c.ForcePush {
 		fmt.Fprintf(os.Stderr, "séance: force-push detection enabled — orphaned diffs will be recovered via the compare API\n")
 	}
@@ -283,6 +308,9 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	var searchProv *searchprovider.Provider
 	if len(c.Watch) > 0 {
 		searchProv = searchprovider.NewWithBaseURL(c.GitHubToken, "https://api.github.com", c.Watch...)
+		if rateLimiter != nil {
+			searchProv.SetHTTPClient(throttle.Wrap(rateLimiter, nil))
+		}
 		if kw := searchProv.Keywords(); len(kw) > 0 {
 			// Optional committer-date scoping (applies only to the search corpus).
 			// A bad date or inverted range fails the run loudly rather than
@@ -369,8 +397,14 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			searchRL = atomic.LoadInt64(&searchProv.Metrics.RateLimitRemaining)
 		}
 
+		// Rate-limit throttle counter (zero when --rate-limit is not configured).
+		var rateLimitThrottled uint64
+		if rateLimiter != nil {
+			rateLimitThrottled = atomic.LoadUint64(&rateLimiter.ThrottledRequests)
+		}
+
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d rate_limit_throttled_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -393,6 +427,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			searchResults,
 			searchEmitted,
 			searchRL,
+			rateLimitThrottled,
 			float64(provPush)/elapsed,
 			survivalPct,
 			float64(fetched)/elapsed,

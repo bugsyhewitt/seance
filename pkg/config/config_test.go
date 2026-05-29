@@ -176,3 +176,28 @@ func TestLoad_OutputLimit(t *testing.T) {
 		t.Errorf("OutputLimit (omitted) = %d, want 0", defGot.OutputLimit)
 	}
 }
+
+// TestLoad_RateLimit verifies the rate_limit TOML key decodes onto the
+// RateLimit field — the config-file half of the --rate-limit flag, used by
+// run-forever monitors that prefer a stable file to a long command line.
+func TestLoad_RateLimit(t *testing.T) {
+	path := writeTemp(t, "rl.toml", `rate_limit = 5.5`)
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.RateLimit != 5.5 {
+		t.Errorf("RateLimit = %v, want 5.5 (from file)", got.RateLimit)
+	}
+
+	// An omitted key must keep the default (0 — no cap).
+	defPath := writeTemp(t, "default-rl.toml", `# no rate_limit set`)
+	defGot, err := Load(defPath)
+	if err != nil {
+		t.Fatalf("Load default: %v", err)
+	}
+	if defGot.RateLimit != 0 {
+		t.Errorf("RateLimit (omitted) = %v, want 0", defGot.RateLimit)
+	}
+}

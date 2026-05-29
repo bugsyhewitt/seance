@@ -155,6 +155,17 @@ func NewWithBaseURL(token, baseURL string, keywords ...string) *Provider {
 // Keywords returns the (cleaned) keyword list this provider watches.
 func (p *Provider) Keywords() []string { return p.keywords }
 
+// SetHTTPClient overrides the provider's HTTP client. Used to install a shared
+// rate-limiting transport (--rate-limit) on top of the default 30s-timeout
+// client. A nil client is ignored. Call before Stream so the poll loop picks
+// up the new client on its first request.
+func (p *Provider) SetHTTPClient(c *http.Client) {
+	if c == nil {
+		return
+	}
+	p.client = c
+}
+
 // SetPollInterval overrides the normal cadence between full sweeps of the
 // keyword list (the value used when the Search-API budget is healthy). It is the
 // operator-facing tuning knob behind séance's --watch-interval flag: the default

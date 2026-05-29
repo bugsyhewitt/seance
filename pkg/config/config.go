@@ -116,6 +116,25 @@ type Config struct {
 	IncludeTags []string `toml:"include_tags" yaml:"include_tags"`
 	ExcludeTags []string `toml:"exclude_tags" yaml:"exclude_tags"`
 
+	// RateLimit caps the AGGREGATE outbound request rate (requests per second)
+	// across every séance HTTP surface — the events provider, the targeted
+	// Search-API provider, the diff fetcher, and any future provider — using a
+	// single shared token bucket. Each provider's own adaptive backoff
+	// (X-RateLimit-Remaining / X-Poll-Interval) keeps it inside its OWN quota
+	// window but is blind to the others; --rate-limit is the single dial that
+	// caps total throughput across all three surfaces in one place. The
+	// dominant use cases are sharing a GitHub token with another tool, running
+	// séance inside a low-budget sidecar, or sitting behind a rate-limited
+	// outbound proxy. 0 (the default) disables the cap entirely — no limiter
+	// is constructed and the prior behaviour is preserved byte-for-byte. The
+	// burst is bounded to ceil(RateLimit) so a quiet period cannot amortise
+	// into an unbounded spike (matching the intuitive reading of "5 req/s").
+	// Requests that have to wait for a token are counted in
+	// rate_limit_throttled_total on the periodic metrics line so an operator
+	// can tell whether the cap is binding or just decorative. A negative value
+	// is rejected at startup as a typo.
+	RateLimit float64 `toml:"rate_limit" yaml:"rate_limit"`
+
 	// State
 	StateDir    string `toml:"state_dir" yaml:"state_dir"`
 	SeenTTLDays int    `toml:"seen_ttl_days" yaml:"seen_ttl_days"`

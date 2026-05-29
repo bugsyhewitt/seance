@@ -215,6 +215,29 @@ func TestMergeConfig_OutputLimitFlagBeatsFile(t *testing.T) {
 	}
 }
 
+// TestMergeConfig_RateLimitFlagBeatsFile verifies --rate-limit follows the
+// defaults < file < flags precedence and that the file value survives when the
+// flag is not set on the CLI.
+func TestMergeConfig_RateLimitFlagBeatsFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.RateLimit = 2.5 // 2.5 req/s cap from the file
+
+	parsed := config.Defaults()
+	parsed.RateLimit = 10 // operator passed --rate-limit 10
+
+	// Flag set: it wins.
+	got := mergeConfig(fileCfg, parsed, map[string]bool{"rate-limit": true})
+	if got.RateLimit != 10 {
+		t.Errorf("RateLimit = %v, want 10 (flag overrides file)", got.RateLimit)
+	}
+
+	// Flag not set: the file value survives.
+	got = mergeConfig(fileCfg, parsed, map[string]bool{})
+	if got.RateLimit != 2.5 {
+		t.Errorf("RateLimit = %v, want 2.5 (file value survives)", got.RateLimit)
+	}
+}
+
 func TestApplyConfigFile_MissingFileErrors(t *testing.T) {
 	origCfg, origPath := cfg, configPath
 	t.Cleanup(func() { cfg, configPath = origCfg, origPath })
