@@ -190,6 +190,15 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	if len(c.Watch) > 0 {
 		searchProv = searchprovider.NewWithBaseURL(c.GitHubToken, "https://api.github.com", c.Watch...)
 		if kw := searchProv.Keywords(); len(kw) > 0 {
+			// Optional committer-date scoping (applies only to the search corpus).
+			// A bad date or inverted range fails the run loudly rather than
+			// silently returning an unscoped firehose.
+			if c.WatchSince != "" || c.WatchUntil != "" {
+				if derr := searchProv.SetDateRange(c.WatchSince, c.WatchUntil); derr != nil {
+					return fmt.Errorf("watch date range: %w", derr)
+				}
+				fmt.Fprintf(os.Stderr, "séance: search-api committer-date scoped to %s\n", describeWatchWindow(c.WatchSince, c.WatchUntil))
+			}
 			fmt.Fprintf(os.Stderr, "séance: search-api monitoring enabled — watching %d keyword(s) via GET /search/commits\n", len(kw))
 		} else {
 			searchProv = nil // every keyword was blank
@@ -483,6 +492,20 @@ func primaryStdoutSink(c config.Config) output.Sink {
 		fmt.Fprintf(os.Stderr, "séance: --tui ignored — stdout is not a terminal; falling back to NDJSON\n")
 	}
 	return ndjson.New(os.Stdout)
+}
+
+// describeWatchWindow renders a human-readable description of the committer-date
+// scoping window for the startup log. At least one bound is non-empty when this
+// is called (the caller only logs when scoping is active).
+func describeWatchWindow(since, until string) string {
+	switch {
+	case since != "" && until != "":
+		return since + ".." + until
+	case since != "":
+		return "on or after " + since
+	default:
+		return "on or before " + until
+	}
 }
 
 // parseWebhookHeaders converts repeated "KEY:VALUE" flag strings into a header

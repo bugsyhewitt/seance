@@ -201,6 +201,122 @@ func TestProvider_AdaptiveCadence_BackoffAndRecovery(t *testing.T) {
 	}
 }
 
+// TestProvider_DateRange_QueryQualifier verifies that a configured committer-date
+// window is rendered into the GitHub Search query as a committer-date: qualifier
+// appended to the keyword, for each of the three window shapes.
+func TestProvider_DateRange_QueryQualifier(t *testing.T) {
+	fixture, _ := os.ReadFile("testdata/search_commits.json")
+
+	cases := []struct {
+		name      string
+		since     string
+		until     string
+		wantQuery string
+	}{
+		{"both bounds", "2026-01-01", "2026-03-01", "acme-corp committer-date:2026-01-01..2026-03-01"},
+		{"since only", "2026-01-01", "", "acme-corp committer-date:>=2026-01-01"},
+		{"until only", "", "2026-03-01", "acme-corp committer-date:<=2026-03-01"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQuery string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.Query().Get("q")
+				w.Header().Set("X-RateLimit-Remaining", "29")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(200)
+				w.Write(fixture)
+			}))
+			defer srv.Close()
+
+			p := searchprovider.NewWithBaseURL("", srv.URL, "acme-corp")
+			if err := p.SetDateRange(tc.since, tc.until); err != nil {
+				t.Fatalf("SetDateRange(%q,%q): %v", tc.since, tc.until, err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			events, _ := p.Stream(ctx)
+			for range events {
+			} // drain
+
+			if gotQuery != tc.wantQuery {
+				t.Errorf("query = %q, want %q", gotQuery, tc.wantQuery)
+			}
+		})
+	}
+}
+
+// TestProvider_DateRange_Unset verifies that with no window configured the query
+// is the bare keyword (no committer-date qualifier) — the prior behavior is
+// byte-for-byte unchanged.
+func TestProvider_DateRange_Unset(t *testing.T) {
+	fixture, _ := os.ReadFile("testdata/search_commits.json")
+
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("q")
+		w.Header().Set("X-RateLimit-Remaining", "29")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	p := searchprovider.NewWithBaseURL("", srv.URL, "acme-corp")
+	// SetDateRange not called at all → no qualifier.
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	events, _ := p.Stream(ctx)
+	for range events {
+	}
+
+	if gotQuery != "acme-corp" {
+		t.Errorf("query = %q, want bare keyword %q", gotQuery, "acme-corp")
+	}
+}
+
+// TestProvider_DateRange_EmptyIsNoOp verifies SetDateRange with both bounds blank
+// (or whitespace) succeeds and leaves the query unscoped.
+func TestProvider_DateRange_EmptyIsNoOp(t *testing.T) {
+	p := searchprovider.New("", "acme-corp")
+	if err := p.SetDateRange("  ", ""); err != nil {
+		t.Fatalf("empty range should be a no-op, got %v", err)
+	}
+}
+
+// TestProvider_DateRange_Validation verifies bad dates and inverted ranges are
+// rejected so a typo'd flag fails loudly instead of returning an unscoped stream.
+func TestProvider_DateRange_Validation(t *testing.T) {
+	cases := []struct {
+		name  string
+		since string
+		until string
+	}{
+		{"bad since", "2026-13-99", ""},
+		{"bad until", "", "not-a-date"},
+		{"non-iso since", "01/01/2026", ""},
+		{"inverted range", "2026-03-01", "2026-01-01"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := searchprovider.New("", "acme-corp")
+			if err := p.SetDateRange(tc.since, tc.until); err == nil {
+				t.Errorf("SetDateRange(%q,%q) = nil, want error", tc.since, tc.until)
+			}
+		})
+	}
+}
+
+// TestProvider_DateRange_EqualBoundsAllowed verifies a single-day window
+// (since == until) is accepted.
+func TestProvider_DateRange_EqualBoundsAllowed(t *testing.T) {
+	p := searchprovider.New("", "acme-corp")
+	if err := p.SetDateRange("2026-02-15", "2026-02-15"); err != nil {
+		t.Fatalf("single-day window should be valid, got %v", err)
+	}
+}
+
 // TestProvider_SurfacesHTTPError verifies a non-200 response is surfaced on the
 // error channel (e.g. a 403 secondary-rate-limit signal).
 func TestProvider_SurfacesHTTPError(t *testing.T) {

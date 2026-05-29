@@ -6,6 +6,33 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Committer-date scoping for `--watch` (`--watch-since` / `--watch-until`)** (search ingestion)
+- Two optional flags scope the targeted Search-API provider (`--watch`) to a
+  committer-date window: `--watch-since YYYY-MM-DD` and `--watch-until
+  YYYY-MM-DD`. Either bound may be set independently; together they form an
+  inclusive range. The events stream is inherently *now*, but the search corpus
+  is an *index of history* — without scoping, `--watch` keeps re-surfacing the
+  same ancient indexed commits. This lets an operator suppress the backlog
+  (`--watch-since` last week) or scope a targeted investigation to a fixed window.
+- The window is rendered into GitHub's `committer-date:` search qualifier and
+  appended to the keyword query, so the **index** performs the filtering
+  server-side: séance issues no extra requests and never fetches commits outside
+  the window. Both-bounds → `committer-date:A..B`; since-only → `>=A`;
+  until-only → `<=B`.
+- Validated at startup: a non-ISO date or a `--watch-since` later than
+  `--watch-until` fails the run loudly rather than silently returning an
+  unscoped firehose. Leaving both unset is byte-for-byte the prior behavior
+  (the search corpus is unscoped); the flags apply only to the search provider —
+  the global events stream is untouched.
+- Purely additive and self-contained in `internal/ingestion/search` plus thin
+  flag/wiring in `cmd/seance` and `pkg/config` — no new dependencies, no
+  architecture change, no effect on the never-store-raw invariant (date scoping
+  is a query qualifier; output is unchanged redacted `Finding`s).
+- Tests: `internal/ingestion/search/provider_test.go` (qualifier rendering for
+  all three window shapes, unscoped-by-default, empty-is-no-op, single-day
+  window, and validation of bad/inverted ranges) plus
+  `cmd/seance/watchwindow_test.go` for the startup-log description helper.
+
 **Global placeholder / dummy-value filter** (scan engine)
 - New always-on false-positive filter in the scan engine that drops matches
   carrying an unmistakable placeholder signature — discharging the v0.2 ROADMAP

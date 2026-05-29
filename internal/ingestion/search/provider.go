@@ -66,11 +66,26 @@ type Metrics struct {
 	RateLimitReset     int64  // last observed X-RateLimit-Reset (Unix timestamp)
 }
 
+// dateLayout is the calendar-day format séance accepts for the optional
+// committer-date scoping window. It mirrors the qualifier GitHub's commit Search
+// API expects (an ISO-8601 calendar date), so a value the operator supplies is
+// passed through verbatim into the query qualifier after validation.
+const dateLayout = "2006-01-02"
+
 // Provider polls the GitHub commit Search API for operator keywords.
 type Provider struct {
 	token    string
 	baseURL  string
 	keywords []string
+
+	// since/until bound the committer-date of returned commits. Either may be
+	// empty (open-ended on that side); when set they are rendered into the Search
+	// query as a committer-date: qualifier so the GitHub index — not séance —
+	// does the date filtering, costing no extra requests. Validated at
+	// construction via SetDateRange; stored as the raw YYYY-MM-DD string GitHub's
+	// qualifier expects.
+	since string
+	until string
 
 	// PollInterval is the normal cadence between full sweeps of the keyword list.
 	// Defaults to defaultPollInterval; tunable for tests.
@@ -130,6 +145,59 @@ func NewWithBaseURL(token, baseURL string, keywords ...string) *Provider {
 
 // Keywords returns the (cleaned) keyword list this provider watches.
 func (p *Provider) Keywords() []string { return p.keywords }
+
+// SetDateRange scopes returned commits to a committer-date window. since and
+// until are calendar dates in YYYY-MM-DD form; either may be empty to leave that
+// side open-ended. The window is inclusive and rendered into the Search query as
+// a committer-date: qualifier so GitHub's index performs the filtering — séance
+// issues no extra requests and fetches no commits outside the window. An empty
+// range (both blank) is a no-op. A non-empty value that is not a valid calendar
+// date, or a since later than until, is rejected so a typo'd flag fails loudly
+// rather than silently returning everything.
+func (p *Provider) SetDateRange(since, until string) error {
+	since = trimSpace(since)
+	until = trimSpace(until)
+
+	var sinceT, untilT time.Time
+	if since != "" {
+		t, err := time.Parse(dateLayout, since)
+		if err != nil {
+			return fmt.Errorf("invalid --watch-since %q: want YYYY-MM-DD", since)
+		}
+		sinceT = t
+	}
+	if until != "" {
+		t, err := time.Parse(dateLayout, until)
+		if err != nil {
+			return fmt.Errorf("invalid --watch-until %q: want YYYY-MM-DD", until)
+		}
+		untilT = t
+	}
+	if since != "" && until != "" && sinceT.After(untilT) {
+		return fmt.Errorf("--watch-since %q is after --watch-until %q", since, until)
+	}
+
+	p.since = since
+	p.until = until
+	return nil
+}
+
+// dateQualifier renders the configured committer-date window into the GitHub
+// Search qualifier syntax appended to the keyword query, or "" when no window is
+// set. Both bounds → "committer-date:A..B"; only since → ">=A"; only until →
+// "<=B". The qualifier scopes results server-side at zero extra request cost.
+func (p *Provider) dateQualifier() string {
+	switch {
+	case p.since != "" && p.until != "":
+		return "committer-date:" + p.since + ".." + p.until
+	case p.since != "":
+		return "committer-date:>=" + p.since
+	case p.until != "":
+		return "committer-date:<=" + p.until
+	default:
+		return ""
+	}
+}
 
 // Name implements ingestion.Provider.
 func (p *Provider) Name() string { return "search" }
@@ -202,8 +270,16 @@ func (p *Provider) poll(ctx context.Context, events chan<- ingestion.CommitEvent
 // sweep issues one Search API request for a single keyword and emits an event
 // for each not-yet-seen commit result.
 func (p *Provider) sweep(ctx context.Context, keyword string, events chan<- ingestion.CommitEvent) error {
+	// The committer-date window (if any) is appended to the keyword as a Search
+	// qualifier so GitHub's index does the date filtering server-side — séance
+	// issues no extra requests and never sees commits outside the window.
+	queryText := keyword
+	if dq := p.dateQualifier(); dq != "" {
+		queryText = keyword + " " + dq
+	}
+
 	q := url.Values{}
-	q.Set("q", keyword)
+	q.Set("q", queryText)
 	q.Set("sort", "committer-date")
 	q.Set("order", "desc")
 	q.Set("per_page", strconv.Itoa(p.PerPage))

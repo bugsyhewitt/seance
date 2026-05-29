@@ -118,6 +118,34 @@ line.
 > A token is strongly recommended with `--watch`: the unauthenticated Search API
 > quota (10 req/min) is barely usable for more than one keyword.
 
+### Scoping the search window (`--watch-since` / `--watch-until`)
+
+The events stream is inherently *now* — it only carries fresh pushes. The search
+corpus is different: it is an **index of history**, so by default `--watch` will
+keep re-surfacing the same ancient commits that match your keyword. Two optional
+flags scope the search provider to a committer-date window so you see only the
+slice of history you care about:
+
+```bash
+# Only commits pushed in the last week (suppress the ancient indexed backlog).
+seance --watch acme-corp --watch-since 2026-05-22
+
+# A targeted investigation: everything that matched in a fixed window.
+seance --watch acme-corp --watch-since 2026-01-01 --watch-until 2026-03-01
+
+# Open-ended on one side: everything up to and including a cutoff date.
+seance --watch acme-corp --watch-until 2026-03-01
+```
+
+Dates are calendar days in `YYYY-MM-DD` form; the range is **inclusive** and
+either bound may be set independently. The window is rendered into GitHub's
+`committer-date:` search qualifier, so the **index** does the filtering — séance
+issues no extra requests and never fetches commits outside the window. These
+flags apply **only** to the `--watch` search provider; the global events stream
+is unaffected. An invalid date, or a `--watch-since` later than `--watch-until`,
+fails the run loudly rather than silently returning an unscoped firehose. Leaving
+both unset preserves the prior behavior (the search corpus is unscoped).
+
 ---
 
 ## Install
@@ -175,6 +203,11 @@ seance --force-push=false
 # Targeted/org-scoped monitoring: ALSO poll the commit Search API for your
 # keywords (repeatable). Runs alongside the global events stream.
 seance --watch acme-corp --watch internal.example.com
+
+# Scope the --watch search corpus to a committer-date window (YYYY-MM-DD) so it
+# stops re-surfacing ancient indexed commits; either bound is optional.
+seance --watch acme-corp --watch-since 2026-05-22
+seance --watch acme-corp --watch-since 2026-01-01 --watch-until 2026-03-01
 
 # Pipe findings to jq; metrics go to stderr so they don't mix
 seance 2>seance.log | jq 'select(.confidence > 0.8)'
