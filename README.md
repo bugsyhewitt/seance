@@ -481,6 +481,41 @@ detection. Allowlists scope a rule's false positives at authoring time;
 `--suppress-file` (see [Deduplication & suppression](#deduplication--suppression))
 silences individual findings at runtime without editing the ruleset.
 
+### Global placeholder / dummy-value filter (always on)
+
+Documentation samples, tutorial stand-ins, and manual masks are the single
+largest class of false positive at firehose scale, and they recur across *every*
+credential type — `AKIAIOSFODNN7EXAMPLE`, `your_api_key`, `ghp_000…000`,
+`AKIAAAAAAAAAAAAAAAAA`. Enumerating them in every rule's `stopwords` is
+impractical, so séance applies one **global placeholder filter** to every match,
+after the entropy gate and before a finding is emitted. A candidate value is
+dropped if it carries an unmistakable placeholder signature:
+
+- a known placeholder word (case-insensitive substring) — `example`,
+  `placeholder`, `changeme`, `your_key` / `your_api_key`, `insert_key`,
+  `dummy_key`, `redacted`, `lorem` …; or
+- a run of the same character repeated 8+ times (a manual mask); or
+- a textbook sequential-hex or full-alphabet fill.
+
+The filter is deliberately **conservative**: precision is weighted far above
+recall, because suppressing a *real* leak is the catastrophic failure and a
+surviving dummy is merely noise the entropy gate and confidence score already
+temper. A randomly generated credential never carries these signatures, so it is
+never dropped. The check runs only on the in-memory candidate value — nothing
+raw is logged, persisted, or emitted, exactly like the entropy gate — and every
+drop is counted in the `placeholders_dropped_total` metric.
+
+A rule that *legitimately* matches placeholder-shaped values can opt out by
+adding the `no-placeholder-filter` tag:
+
+```toml
+[[rules]]
+  id       = "intentional-sample-detector"
+  regex    = '''…'''
+  keywords = ["…"]
+  tags     = ["no-placeholder-filter"]   # bypass the global placeholder filter
+```
+
 ### Validating a ruleset (`seance rules validate`)
 
 The scan engine is **fail-safe by design**: a rule whose `regex` does not
@@ -657,9 +692,9 @@ Live metrics are written to stderr every 60 s in `key=value` format:
 séance metrics ts=1234567890 push_events_total=454 force_pushes_total=3 \
   prefilter_passed_total=405 prefilter_dropped_total=49 fetches_total=405 \
   polls_total=17 findings_total=0 findings_suppressed_total=2 \
-  seen_commits_tracked=412 seen_findings_tracked=6 push_events_hr=1602.3 \
-  prefilter_survival_pct=89.2 fetches_hr=1429.3 polls_hr=60.0 \
-  rate_limit_remaining=4592 rate_limit_reset_in=1981
+  placeholders_dropped_total=11 seen_commits_tracked=412 seen_findings_tracked=6 \
+  push_events_hr=1602.3 prefilter_survival_pct=89.2 fetches_hr=1429.3 \
+  polls_hr=60.0 rate_limit_remaining=4592 rate_limit_reset_in=1981
 ```
 
 `force_pushes_total` counts force-push (history-rewrite) events detected and
@@ -674,6 +709,11 @@ shutdown before the state file is persisted.
 operator suppress-list, and `seen_findings_tracked` is the current size of the
 persistent fingerprint set — both bounded by the same TTL (see
 [Deduplication & suppression](#deduplication--suppression)).
+
+`placeholders_dropped_total` counts matches dropped by the global
+placeholder/dummy-value filter — documentation samples, masks, and `your_key`
+stand-ins suppressed before they ever became findings (see
+[Global placeholder / dummy-value filter](#global-placeholder--dummy-value-filter-always-on)).
 
 Multiple tokens on one GitHub account do **not** raise the ceiling — the
 5,000/hr limit is per account, not per token.

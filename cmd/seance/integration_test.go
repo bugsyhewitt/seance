@@ -56,8 +56,8 @@ func TestEndToEnd_FindsSecretInFakeEvent(t *testing.T) {
 			fc := fetch.FileContent{
 				Event:   e,
 				FileRef: ref,
-				Patch:   "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
-				Lines:   []string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+				Patch:   "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R\n",
+				Lines:   []string{"+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"},
 			}
 			engine.Scan(ctx, fc)
 		}
@@ -88,7 +88,7 @@ func TestEndToEnd_FindsSecretInFakeEvent(t *testing.T) {
 		t.Error("redacted field must not be empty")
 	}
 	// Raw secret must not appear in the emitted JSON.
-	if strings.Contains(buf.String(), "AKIAIOSFODNN7EXAMPLE") {
+	if strings.Contains(buf.String(), "AKIA2E4F6H8J0L2N4P6R") {
 		t.Error("NDJSON output must not contain raw secret value")
 	}
 	// 20-char secret (< 24) → fingerprint; must start with sha256:
@@ -131,8 +131,8 @@ func TestEndToEnd_FileSinkTeesAlongsideStdout(t *testing.T) {
 		fc := fetch.FileContent{
 			Event:   event,
 			FileRef: ref,
-			Patch:   "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
-			Lines:   []string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+			Patch:   "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R\n",
+			Lines:   []string{"+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"},
 		}
 		if _, err := engine.Scan(ctx, fc); err != nil {
 			t.Fatalf("scan: %v", err)
@@ -161,7 +161,7 @@ func TestEndToEnd_FileSinkTeesAlongsideStdout(t *testing.T) {
 	if ff.Redacted == "" {
 		t.Error("file finding redacted field must not be empty")
 	}
-	if strings.Contains(string(fileData), "AKIAIOSFODNN7EXAMPLE") {
+	if strings.Contains(string(fileData), "AKIA2E4F6H8J0L2N4P6R") {
 		t.Error("file sink output must not contain raw secret value")
 	}
 	// The file record and the stdout record describe the same finding.
@@ -200,8 +200,8 @@ func TestEndToEnd_SarifSinkTeesAlongsideStdout(t *testing.T) {
 		fc := fetch.FileContent{
 			Event:   event,
 			FileRef: ref,
-			Patch:   "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
-			Lines:   []string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+			Patch:   "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R\n",
+			Lines:   []string{"+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"},
 		}
 		if _, err := engine.Scan(ctx, fc); err != nil {
 			t.Fatalf("scan: %v", err)
@@ -237,7 +237,7 @@ func TestEndToEnd_SarifSinkTeesAlongsideStdout(t *testing.T) {
 	if !strings.Contains(uri, "alice/repo") || !strings.Contains(uri, ".env") {
 		t.Errorf("sarif artifact uri missing repo/path: %q", uri)
 	}
-	if strings.Contains(string(data), "AKIAIOSFODNN7EXAMPLE") {
+	if strings.Contains(string(data), "AKIA2E4F6H8J0L2N4P6R") {
 		t.Error("SARIF output must not contain raw secret value")
 	}
 	// The SARIF report and the stdout record describe the same finding.

@@ -238,6 +238,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		stMu.Unlock()
 
 		findingsSuppressed := engine.SuppressedCount()
+		placeholdersDropped := engine.PlaceholderDroppedCount()
 
 		var alertsSent, alertsFailed, alertsDropped uint64
 		if webhookSink != nil {
@@ -255,7 +256,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -265,6 +266,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			provFetch,
 			findings,
 			findingsSuppressed,
+			placeholdersDropped,
 			seenTracked,
 			seenFindingsTracked,
 			alertsSent,
