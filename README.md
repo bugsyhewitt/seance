@@ -481,6 +481,56 @@ detection. Allowlists scope a rule's false positives at authoring time;
 `--suppress-file` (see [Deduplication & suppression](#deduplication--suppression))
 silences individual findings at runtime without editing the ruleset.
 
+### Validating a ruleset (`seance rules validate`)
+
+The scan engine is **fail-safe by design**: a rule whose `regex` does not
+compile — or an allowlist whose `regexes`/`paths` pattern does not compile — is
+*silently skipped* at scan time. That is the right runtime behaviour (a bad edit
+must never crash a monitor you've left running for days), but it has a sharp
+edge: a typo silently disables detection, and the only symptom is a quiet stream
+of zero findings you might not notice for days.
+
+`seance rules validate` is the **pre-flight check** that surfaces those defects
+*before* you deploy a ruleset, so you learn at edit time, not from a silent gap
+in coverage:
+
+```bash
+# Validate the default --signatures file (no argument needed).
+seance rules validate
+
+# Validate a specific file.
+seance rules validate my-rules.toml
+
+# Validate every *.toml in a directory.
+seance rules validate signatures/
+```
+
+It reports the exact defects the engine would tolerate at runtime:
+
+- a rule whose `regex` is empty or does not compile (**error** — silently
+  skipped at scan time)
+- an `allowlist` `regexes`/`paths` pattern that does not compile (**error** —
+  silently skipped, so the false positive it was meant to suppress fires)
+- a missing or duplicate rule `id` (**error**)
+- a `secretGroup` that is negative or exceeds the regex's capture-group count
+  (**error** — the engine would fall back to the full match and redact too much)
+- a rule with no `keywords` (**warning** — its regex runs against every line, a
+  performance and false-positive hazard) or an impossible `entropy` floor
+  (**warning** — the rule can never fire)
+
+Example output against a ruleset with a typo:
+
+```
+my-rules.toml: 4 rule(s), 1 error(s), 1 warning(s)
+  ERROR: [aws-access-key-id] regex: regex does not compile (the engine silently skips this rule at runtime): error parsing regexp: missing closing ]
+  WARNING: [generic-key] keywords: rule has no keywords; its regex runs against every line (slower, noisier).
+```
+
+Exit status makes it CI-friendly: **0** when there are no errors (warnings alone
+do not fail), **1** when any error is found, **2** when a file cannot be read or
+parsed. Drop `seance rules validate signatures/` into a pre-commit hook or CI
+step to catch a broken rule before it ever reaches a running monitor.
+
 ### Hot-reload (SIGHUP)
 
 séance is built to run for days. When you add or tune a rule, you should not
@@ -491,6 +541,10 @@ Instead, edit the signatures file in place and send the process `SIGHUP`:
 ```bash
 # Edit your rules...
 vim my-rules.toml
+
+# ...validate the edit before it goes live (catches a broken regex the running
+# monitor would otherwise silently skip)...
+seance rules validate my-rules.toml
 
 # ...then reload them into the running process.
 kill -HUP <pid>
