@@ -1,13 +1,26 @@
 // Package config defines séance's runtime configuration.
 package config
 
+import (
+	"fmt"
+	"os"
+
+	"github.com/BurntSushi/toml"
+)
+
 // Config holds all runtime configuration for séance.
+//
+// Every operator-facing field carries a `toml:` tag so the entire configuration
+// can be expressed in a single versioned TOML file (see Load) instead of a long
+// command line — séance's intended deployment is a run-forever monitor under
+// systemd/Docker, where a file is far easier to manage than 20+ flags. Flags and
+// environment variables always override the file; see runScan for precedence.
 type Config struct {
-	Version string
+	Version string `toml:"-"`
 
 	// Ingestion
-	GitHubToken     string `yaml:"github_token"`
-	PollIntervalSec int    `yaml:"poll_interval_sec"`
+	GitHubToken     string `toml:"github_token" yaml:"github_token"`
+	PollIntervalSec int    `toml:"poll_interval_sec" yaml:"poll_interval_sec"`
 
 	// Watch is an optional list of keywords for the targeted/org-scoped Search-API
 	// ingestion provider (the gitGraber-style coverage axis). When non-empty,
@@ -18,7 +31,7 @@ type Config struct {
 	// Search API has its own much stricter quota (30 req/min authenticated), so
 	// the search provider governs its own cadence independently of the events
 	// poller. Empty disables the search provider; the events stream is always on.
-	Watch []string `yaml:"watch"`
+	Watch []string `toml:"watch" yaml:"watch"`
 
 	// WatchSince and WatchUntil optionally scope the Search-API provider to a
 	// committer-date window (calendar dates, YYYY-MM-DD). They apply ONLY to the
@@ -30,20 +43,20 @@ type Config struct {
 	// the filtering at zero extra request cost. Empty leaves the search corpus
 	// unscoped (the prior behavior). Useful to suppress ancient indexed commits
 	// (--watch-since last week) or to scope a targeted investigation to a window.
-	WatchSince string `yaml:"watch_since"`
-	WatchUntil string `yaml:"watch_until"`
+	WatchSince string `toml:"watch_since" yaml:"watch_since"`
+	WatchUntil string `toml:"watch_until" yaml:"watch_until"`
 
 	// Pre-filter
-	MaxFilesPerCommit int `yaml:"max_files_per_commit"`
+	MaxFilesPerCommit int `toml:"max_files_per_commit" yaml:"max_files_per_commit"`
 
 	// ForcePush enables detection of force-push (history-rewrite) events and
 	// recovery of the orphaned diff via the compare API. Highest-signal source
 	// for intentional secret removal; adds one compare request per force-push.
-	ForcePush bool `yaml:"force_push"`
+	ForcePush bool `toml:"force_push" yaml:"force_push"`
 
 	// Scan
-	SignaturesPath string  `yaml:"signatures_path"`
-	EntropyThresh  float64 `yaml:"entropy_threshold"`
+	SignaturesPath string  `toml:"signatures_path" yaml:"signatures_path"`
+	EntropyThresh  float64 `toml:"entropy_threshold" yaml:"entropy_threshold"`
 
 	// MinConfidence is a global confidence floor in [0.0, 1.0]. Any finding whose
 	// computed confidence score is below it is dropped before it reaches ANY sink —
@@ -54,11 +67,11 @@ type Config struct {
 	// tool. 0 (the default) admits every finding, identical to prior behavior.
 	// Distinct from WebhookMinConfidence, which gates only the webhook channel and
 	// is applied on top of this engine-wide floor.
-	MinConfidence float64 `yaml:"min_confidence"`
+	MinConfidence float64 `toml:"min_confidence" yaml:"min_confidence"`
 
 	// State
-	StateDir    string `yaml:"state_dir"`
-	SeenTTLDays int    `yaml:"seen_ttl_days"`
+	StateDir    string `toml:"state_dir" yaml:"state_dir"`
+	SeenTTLDays int    `toml:"seen_ttl_days" yaml:"seen_ttl_days"`
 
 	// SuppressFile is an optional path to a newline-delimited list of finding
 	// fingerprints (the .gitleaksignore analogue). Any finding whose fingerprint
@@ -66,11 +79,11 @@ type Config struct {
 	// always-ignore list for known false positives. Blank lines and lines
 	// beginning with '#' are ignored. Cross-run re-leak suppression (identical
 	// findings seen in a prior run) is always on and needs no flag.
-	SuppressFile string `yaml:"suppress_file"`
+	SuppressFile string `toml:"suppress_file" yaml:"suppress_file"`
 
 	// Output
-	OutputFormat string `yaml:"output_format"` // "json", "sarif" (v0.3+)
-	OutputPath   string `yaml:"output_path"`   // "-" for stdout
+	OutputFormat string `toml:"output_format" yaml:"output_format"` // "json", "sarif" (v0.3+)
+	OutputPath   string `toml:"output_path" yaml:"output_path"`     // "-" for stdout
 
 	// SarifPath is an optional path to which séance writes a SARIF 2.1.0 document
 	// of all findings observed during the run. SARIF (the OASIS Static Analysis
@@ -81,7 +94,7 @@ type Config struct {
 	// built solely from redacted Findings, so the never-store-raw invariant holds.
 	// Empty disables the SARIF sink; it composes alongside stdout, --output-file,
 	// --tui, and the webhook sink unchanged.
-	SarifPath string `yaml:"sarif_path"`
+	SarifPath string `toml:"sarif_path" yaml:"sarif_path"`
 
 	// TUI enables the live terminal feed: a scrolling, confidence-colored wall of
 	// recent findings with running counters, in place of the raw NDJSON stream on
@@ -89,20 +102,20 @@ type Config struct {
 	// dedup, and alerting are unaffected. When stdout is not an interactive
 	// terminal (a pipe, a file, CI), séance silently falls back to NDJSON so
 	// downstream consumers are never corrupted by escape sequences.
-	TUI bool `yaml:"tui"`
+	TUI bool `toml:"tui" yaml:"tui"`
 
 	// Webhook alerting sink. When WebhookURL is non-empty, each Finding (above
 	// WebhookMinConfidence) is POSTed as JSON to the endpoint in addition to the
 	// stdout NDJSON stream. Delivery is non-blocking: a slow or dead endpoint
 	// never stalls or fails the scan.
-	WebhookURL           string   `yaml:"webhook_url"`
-	WebhookHeaders       []string `yaml:"webhook_headers"`        // each "Key:Value"
-	WebhookMinConfidence float64  `yaml:"webhook_min_confidence"` // only alert at/above this score
+	WebhookURL           string   `toml:"webhook_url" yaml:"webhook_url"`
+	WebhookHeaders       []string `toml:"webhook_headers" yaml:"webhook_headers"`               // each "Key:Value"
+	WebhookMinConfidence float64  `toml:"webhook_min_confidence" yaml:"webhook_min_confidence"` // only alert at/above this score
 	// WebhookFormat selects the POST body shape: "json" (the redacted Finding
 	// object, default), "slack" (a Slack-compatible {"text": ...} envelope), or
 	// "discord" (a Discord-compatible {"content": ...} envelope). Slack/Discord
 	// let --webhook-url point straight at an incoming webhook with no relay.
-	WebhookFormat string `yaml:"webhook_format"`
+	WebhookFormat string `toml:"webhook_format" yaml:"webhook_format"`
 
 	// WebhookListenAddr is the TCP address on which séance runs an inbound GitHub
 	// push-webhook receiver, e.g. ":8099" or "127.0.0.1:8099". When non-empty,
@@ -111,14 +124,14 @@ type Config struct {
 	// This is additive: it fans CommitEvents into the same pipeline as the global
 	// events stream and the --watch search provider.
 	// Empty disables the receiver (default).
-	WebhookListenAddr string `yaml:"webhook_listen_addr"`
+	WebhookListenAddr string `toml:"webhook_listen_addr" yaml:"webhook_listen_addr"`
 
 	// WebhookListenSecret is the HMAC-SHA256 secret configured on the GitHub
 	// webhook ("Secret" field). When non-empty, every delivery's
 	// X-Hub-Signature-256 is verified before the body is parsed. Running without
 	// a secret is allowed (private-network / sidecar deployments) but séance logs
 	// a warning. Ignored when WebhookListenAddr is empty.
-	WebhookListenSecret string `yaml:"webhook_listen_secret"`
+	WebhookListenSecret string `toml:"webhook_listen_secret" yaml:"webhook_listen_secret"`
 }
 
 // Defaults returns a Config with sensible defaults.
@@ -135,4 +148,46 @@ func Defaults() Config {
 		OutputFormat:      "json",
 		OutputPath:        "-",
 	}
+}
+
+// Load reads a TOML configuration file at path and returns a Config seeded with
+// Defaults() and overlaid with every value the file sets. Fields the file omits
+// keep their default. The returned Config is the file layer of séance's
+// configuration precedence; the caller is responsible for letting explicitly-set
+// command-line flags and environment variables override it on top (defaults <
+// file < flags/env).
+//
+// path must exist and parse as valid TOML; a missing file or a parse error is
+// returned as an error rather than silently ignored, so a typo in --config never
+// causes séance to run with surprising defaults. An unknown key in the file is
+// likewise an error — an operator misspelling "webhook_url" should be told, not
+// have the alert channel silently disabled.
+//
+// Load never touches the network, never reads secrets from anywhere but the
+// file, and preserves the never-store-raw invariant (it only populates Config,
+// which carries no raw secret material).
+func Load(path string) (Config, error) {
+	c := Defaults()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("reading config file %q: %w", path, err)
+	}
+
+	md, err := toml.Decode(string(data), &c)
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing config file %q: %w", path, err)
+	}
+
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, 0, len(undecoded))
+		for _, k := range undecoded {
+			keys = append(keys, k.String())
+		}
+		return Config{}, fmt.Errorf("config file %q has unknown key(s): %v", path, keys)
+	}
+
+	// Version is an internal build constant, never operator-set; keep the binary's.
+	c.Version = Defaults().Version
+	return c, nil
 }

@@ -189,6 +189,10 @@ seance
 # Explicit flag (overrides env var)
 seance --token ghp_your_token_here
 
+# Load configuration from a TOML file instead of a long command line.
+# Any flag you ALSO pass overrides the file (defaults < file < flags).
+seance --config /etc/seance/seance.toml
+
 # Custom signatures file
 seance --signatures /path/to/rules.toml
 
@@ -233,6 +237,65 @@ seance \
   --webhook-header "Authorization:Bearer $ALERT_TOKEN" \
   --webhook-min-confidence 0.85
 ```
+
+### Configuration file (`--config`)
+
+séance's intended deployment is a run-forever monitor under systemd or Docker. At
+that point a 20-flag command line is brittle to manage and impossible to review.
+`--config <path>` lets you express the entire configuration in one versioned TOML
+file instead.
+
+Precedence runs **defaults < file < flags/env** — built-in defaults are the base,
+the file overlays them, and any flag you *also* pass on the command line overrides
+the same field in the file. That means you can keep a stable file checked into
+config management and still override one value ad hoc:
+
+```bash
+# Run from a file…
+seance --config /etc/seance/seance.toml
+
+# …but bump the poll interval just for this run; the flag wins over the file.
+seance --config /etc/seance/seance.toml --poll-interval 30
+```
+
+Every flag has a corresponding snake_case key. Keys you omit keep their default;
+unknown keys are a **hard error** (a misspelled `webhook_ur` should be reported,
+not silently disable your alert channel), and a missing or unparseable file fails
+the run rather than quietly falling back to defaults. The token can live in the
+file (`github_token = "..."`) or, more safely, stay in the `GITHUB_TOKEN`
+environment variable — the env var still applies on top of the file.
+
+```toml
+# /etc/seance/seance.toml — every key is optional; omit to keep the default.
+poll_interval_sec = 30
+force_push        = true
+min_confidence    = 0.7              # global floor before any sink
+
+# Targeted/org-scoped monitoring (alongside the global events stream)
+watch             = ["acme-corp", "internal.example.com"]
+watch_since       = "2026-01-01"
+
+# Durable record + live feed
+tui               = true
+output_path       = "/var/log/seance/findings.ndjson"
+sarif_path        = "/var/log/seance/findings.sarif"
+
+# Real-time alerting
+webhook_url            = "https://hooks.example.com/seance"
+webhook_headers        = ["Authorization:Bearer REDACTED"]
+webhook_min_confidence = 0.85
+webhook_format         = "slack"
+
+# Cross-run dedup / suppression
+suppress_file = "/etc/seance/suppress.txt"
+state_dir     = "/var/lib/seance"
+seen_ttl_days = 7
+```
+
+No new dependency is introduced — the file is parsed with the same TOML library
+séance already uses for signatures. The config file only ever holds configuration;
+the never-store-raw invariant is untouched (séance still writes only redacted
+findings to every sink).
 
 ### Output format
 
