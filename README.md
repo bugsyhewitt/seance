@@ -587,6 +587,28 @@ Community contributions to `signatures/` are welcome. Please include:
 - `keywords` for fast pre-scan matching
 - An `allowlist` block for known test/dummy values
 
+### Built-in coverage
+
+The shipped `signatures/default.toml` detects the high-prevalence credential
+types seen in real public-repo leaks:
+
+- **Cloud** — AWS access key IDs and secret access keys, Google API keys
+- **Version control** — GitHub PATs (classic, OAuth, app, fine-grained)
+- **Payments** — Stripe secret and restricted keys
+- **Messaging / email / SMS** — Slack bot/user tokens and webhooks, SendGrid,
+  Twilio
+- **AI / LLM providers** — OpenAI (legacy `sk-` and project/service
+  `sk-proj-`/`sk-svcacct-`), Anthropic (`sk-ant-`), and Hugging Face (`hf_`)
+  tokens — the fastest-growing class of leaked credential in the 2024–2026
+  landscape, where a live key bills the victim's account directly
+- **Crypto** — PEM and PGP private-key blocks
+- **Generic** — a high-entropy `api_key = "…"` catch-all for everything else
+
+Each rule matches the issuer's documented, structurally-unambiguous prefix shape
+(no broad catch-alls beyond the explicit generic rule) and most carry an entropy
+gate, so the global placeholder filter and confidence score keep false positives
+low out of the box.
+
 ### Allowlists
 
 Every rule may carry an `allowlist` block — the gitleaks-standard mechanism for
