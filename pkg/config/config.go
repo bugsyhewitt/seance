@@ -45,6 +45,17 @@ type Config struct {
 	SignaturesPath string  `yaml:"signatures_path"`
 	EntropyThresh  float64 `yaml:"entropy_threshold"`
 
+	// MinConfidence is a global confidence floor in [0.0, 1.0]. Any finding whose
+	// computed confidence score is below it is dropped before it reaches ANY sink —
+	// stdout/NDJSON, --output-file, --sarif-file, --tui, and the webhook — so the
+	// operator surfaces only high-confidence findings everywhere at once. At
+	// firehose scale alert fatigue is the failure mode that gets a monitor turned
+	// off; this is the single dial that trades recall for precision across the whole
+	// tool. 0 (the default) admits every finding, identical to prior behavior.
+	// Distinct from WebhookMinConfidence, which gates only the webhook channel and
+	// is applied on top of this engine-wide floor.
+	MinConfidence float64 `yaml:"min_confidence"`
+
 	// State
 	StateDir    string `yaml:"state_dir"`
 	SeenTTLDays int    `yaml:"seen_ttl_days"`

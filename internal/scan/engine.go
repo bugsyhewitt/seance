@@ -46,6 +46,17 @@ type Engine struct {
 	// placeholder/dummy-value filter (documentation samples, masks, "your_key"
 	// stand-ins). Read atomically for the placeholders_dropped_total metric.
 	placeholderDropped uint64
+
+	// minConfidence is a global confidence floor in [0.0, 1.0]. Any finding whose
+	// computed confidence is below it is dropped before the dedup/sink fan-out, so
+	// EVERY sink (stdout, file, SARIF, TUI, webhook) sees only findings at or above
+	// the threshold. Zero (the default) admits everything — byte-for-byte the prior
+	// behavior. Fixed for the life of the engine.
+	minConfidence float64
+
+	// belowConfidence counts candidate findings dropped by the minConfidence
+	// floor. Read atomically for the findings_below_confidence_total metric.
+	belowConfidence uint64
 }
 
 // Suppressor decides whether a finding should be suppressed (not emitted) on the
@@ -81,10 +92,36 @@ func (e *Engine) WithSuppressor(s Suppressor) *Engine {
 	return e
 }
 
+// WithMinConfidence returns the engine with a global confidence floor installed.
+// Any finding whose computed confidence is strictly below threshold is dropped
+// before deduplication and sink fan-out, so every configured sink — stdout, file,
+// SARIF, TUI, and webhook — only ever sees findings at or above it. A threshold
+// of 0 (the default) admits every finding, leaving the prior behavior unchanged.
+// Values are clamped to [0.0, 1.0]. Intended to be called once at construction,
+// before Scan runs. It is independent of, and applied before, the webhook sink's
+// own per-sink MinConfidence gate.
+func (e *Engine) WithMinConfidence(threshold float64) *Engine {
+	if threshold < 0 {
+		threshold = 0
+	}
+	if threshold > 1 {
+		threshold = 1
+	}
+	e.minConfidence = threshold
+	return e
+}
+
 // SuppressedCount returns the cumulative number of findings dropped by the
 // suppressor. Used for the findings_suppressed_total metric.
 func (e *Engine) SuppressedCount() uint64 {
 	return atomic.LoadUint64(&e.suppressed)
+}
+
+// BelowConfidenceCount returns the cumulative number of findings dropped by the
+// global confidence floor (--min-confidence). Used for the
+// findings_below_confidence_total metric.
+func (e *Engine) BelowConfidenceCount() uint64 {
+	return atomic.LoadUint64(&e.belowConfidence)
 }
 
 // PlaceholderDroppedCount returns the cumulative number of candidate matches
@@ -190,6 +227,18 @@ func (e *Engine) Scan(ctx context.Context, content fetch.FileContent) (int, erro
 				}
 
 				confidence := computeConfidence(rule, secretVal, content.FileRef.Path)
+
+				// Global confidence floor: surface only high-confidence findings.
+				// Applied here — before fingerprinting, dedup, and the sink fan-out —
+				// so a low-confidence match never reaches ANY sink (stdout, file,
+				// SARIF, TUI, webhook) and never consumes a dedup slot. The default
+				// floor is 0, which admits everything (unchanged behavior). This is
+				// the engine-wide noise gate; the webhook sink keeps its own,
+				// independent MinConfidence for finer per-channel tuning above this.
+				if confidence < e.minConfidence {
+					atomic.AddUint64(&e.belowConfidence, 1)
+					continue
+				}
 
 				finding := output.Finding{
 					RuleID:     rule.ID,
