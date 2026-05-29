@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 
 	"github.com/bugsyhewitt/seance/internal/output"
@@ -116,6 +117,16 @@ func (s *Sink) Close() error {
 // build assembles the in-memory SARIF document from the buffered findings. Rules
 // are de-duplicated into the tool driver's rule catalog; each finding becomes one
 // result that references its rule by index. Caller must hold s.mu.
+//
+// The rule catalog is enriched so GitHub Advanced Security / code scanning can
+// triage séance's output natively: each reportingDescriptor carries a helpUri, a
+// deduplicated union of the findings' tags, a defaultConfiguration.level, and a
+// properties["security-severity"] numeric score. Code scanning reads
+// security-severity to bucket alerts into Critical/High/Medium/Low and to enforce
+// severity-gated branch protection; without it every finding lands unclassified.
+// A rule's severity is taken from the highest-confidence finding that matched it,
+// so a rule that fired once with high confidence is not under-rated by a later
+// low-confidence hit.
 func (s *Sink) build() document {
 	// Stable rule catalog: one entry per distinct RuleID, in first-seen order,
 	// with each result's ruleIndex pointing into it (SARIF's normalized form).
@@ -125,6 +136,11 @@ func (s *Sink) build() document {
 	// document valid for strict SARIF consumers.
 	rules := make([]reportingDescriptor, 0, len(s.findings))
 	results := make([]result, 0, len(s.findings))
+
+	// Per-rule aggregation for the enriched catalog: the peak confidence seen for
+	// the rule (drives its severity/level) and the union of its findings' tags.
+	ruleMaxConf := make(map[string]float64)
+	ruleTags := make(map[string]map[string]struct{})
 
 	for _, f := range s.findings {
 		idx, ok := ruleIndex[f.RuleID]
@@ -137,7 +153,41 @@ func (s *Sink) build() document {
 				ShortDescription: &message{Text: ruleText(f)},
 			})
 		}
+		if f.Confidence > ruleMaxConf[f.RuleID] {
+			ruleMaxConf[f.RuleID] = f.Confidence
+		}
+		if len(f.Tags) > 0 {
+			set := ruleTags[f.RuleID]
+			if set == nil {
+				set = make(map[string]struct{})
+				ruleTags[f.RuleID] = set
+			}
+			for _, t := range f.Tags {
+				if t != "" {
+					set[t] = struct{}{}
+				}
+			}
+		}
 		results = append(results, findingToResult(f, idx))
+	}
+
+	// Enrich each catalog entry now that every finding has been folded in, so the
+	// severity reflects the peak-confidence hit and the tag set is complete.
+	for i := range rules {
+		id := rules[i].ID
+		conf := ruleMaxConf[id]
+		rules[i].HelpURI = toolInfoURI
+		rules[i].DefaultConfiguration = &reportingConfiguration{Level: levelForConfidence(conf)}
+		props := map[string]any{
+			// GitHub code scanning reads security-severity (a "0.0"–"10.0" string)
+			// to assign Critical/High/Medium/Low. Map séance's 0–1 confidence onto
+			// the 0–10 CVSS-style axis it expects.
+			"security-severity": securitySeverity(conf),
+		}
+		if tags := sortedKeys(ruleTags[id]); len(tags) > 0 {
+			props["tags"] = tags
+		}
+		rules[i].Properties = props
 	}
 
 	driver := toolComponent{
@@ -155,6 +205,36 @@ func (s *Sink) build() document {
 			Results: results,
 		}},
 	}
+}
+
+// securitySeverity maps séance's 0–1 confidence onto GitHub code scanning's
+// "security-severity" axis, a CVSS-style numeric string in [0.0, 10.0]. Code
+// scanning buckets it: ≥ 9.0 Critical, ≥ 7.0 High, ≥ 4.0 Medium, otherwise Low.
+// A linear confidence×10 keeps the mapping transparent and monotonic, with two
+// decimals so the value is stable and never renders in scientific notation.
+func securitySeverity(confidence float64) string {
+	v := confidence * 10
+	if v < 0 {
+		v = 0
+	}
+	if v > 10 {
+		v = 10
+	}
+	return strconv.FormatFloat(v, 'f', 2, 64)
+}
+
+// sortedKeys returns the keys of a set in deterministic order so the rule
+// catalog (and thus the whole document) is byte-stable across runs.
+func sortedKeys(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ruleText returns a human description for a rule's catalog entry, preferring the
@@ -198,8 +278,13 @@ func findingToResult(f output.Finding, ruleIdx int) result {
 	}
 
 	// Surface séance's 0-1 confidence as a property so consumers can sort/filter
-	// by signal strength, and carry the rule tags through.
-	props := map[string]any{"confidence": f.Confidence}
+	// by signal strength, and carry the rule tags through. The per-result
+	// security-severity mirrors the rule-catalog value GitHub code scanning reads,
+	// so triagers can sort individual alerts by severity even within one rule.
+	props := map[string]any{
+		"confidence":        f.Confidence,
+		"security-severity": securitySeverity(f.Confidence),
+	}
 	if f.Provider != "" {
 		props["provider"] = f.Provider
 	}
@@ -320,9 +405,19 @@ type toolComponent struct {
 }
 
 type reportingDescriptor struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name,omitempty"`
-	ShortDescription *message `json:"shortDescription,omitempty"`
+	ID                   string                  `json:"id"`
+	Name                 string                  `json:"name,omitempty"`
+	ShortDescription     *message                `json:"shortDescription,omitempty"`
+	HelpURI              string                  `json:"helpUri,omitempty"`
+	DefaultConfiguration *reportingConfiguration `json:"defaultConfiguration,omitempty"`
+	Properties           map[string]any          `json:"properties,omitempty"`
+}
+
+// reportingConfiguration carries a rule's default result level. GitHub code
+// scanning and other consumers fall back to this when a result omits its own
+// level, and surface it in the rule catalog UI.
+type reportingConfiguration struct {
+	Level string `json:"level"`
 }
 
 type result struct {

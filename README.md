@@ -439,6 +439,17 @@ Behavior and guarantees:
   invariant holds for the SARIF report for free.
 - **Confidence → level.** séance's 0–1 confidence maps onto SARIF's `result.level`:
   `≥ 0.8` → `error`, `≥ 0.5` → `warning`, otherwise `note`.
+- **GitHub code-scanning severity.** Each rule in the `tool.driver.rules[]` catalog
+  carries a `helpUri`, a `defaultConfiguration.level`, the deduplicated union of its
+  findings' `tags`, and a `properties["security-severity"]` numeric string
+  (`"0.0"`–`"10.0"`, derived as `confidence × 10`). GitHub Advanced Security reads
+  `security-severity` to bucket alerts into **Critical / High / Medium / Low** and to
+  drive severity-gated branch protection — so séance findings land triaged and
+  sortable instead of as undifferentiated warnings. A rule's severity reflects the
+  *highest-confidence* finding that matched it, so a later low-confidence hit never
+  down-rates it. Every individual `result` also carries its own
+  `properties["security-severity"]`, so alerts are sortable by severity even within a
+  single rule.
 - **Atomic write.** The report is written via a temp file and renamed into place,
   so a crash mid-write never leaves a half-written document a SARIF consumer would
   reject. The parent directory is auto-created (`--sarif-file reports/scan.sarif`

@@ -202,6 +202,157 @@ func TestLevelBuckets(t *testing.T) {
 	}
 }
 
+// firstRule returns the i-th rule from the driver's catalog for assertions.
+func firstRule(t *testing.T, doc map[string]any) map[string]any {
+	t.Helper()
+	rules := firstRun(t, doc)["tool"].(map[string]any)["driver"].(map[string]any)["rules"].([]any)
+	if len(rules) == 0 {
+		t.Fatalf("expected at least one rule, got %v", rules)
+	}
+	return rules[0].(map[string]any)
+}
+
+// TestRuleCatalog_SecuritySeverity verifies each catalog rule carries the
+// GitHub-code-scanning security-severity (a "0.0"–"10.0" string) derived from the
+// peak confidence seen for that rule, plus a helpUri and defaultConfiguration.
+func TestRuleCatalog_SecuritySeverity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.sarif")
+	s := sarif.New(path, "")
+	_ = s.Emit(context.Background(), sampleFinding()) // confidence 0.95
+	_ = s.Close()
+
+	rule := firstRule(t, decode(t, path))
+
+	props, ok := rule["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties on rule catalog entry")
+	}
+	if props["security-severity"] != "9.50" { // 0.95 * 10
+		t.Errorf("security-severity: got %v want 9.50", props["security-severity"])
+	}
+	if rule["helpUri"] != "https://github.com/bugsyhewitt/seance" {
+		t.Errorf("helpUri: got %v", rule["helpUri"])
+	}
+	dc, ok := rule["defaultConfiguration"].(map[string]any)
+	if !ok {
+		t.Fatal("expected defaultConfiguration on rule")
+	}
+	if dc["level"] != "error" { // 0.95 >= 0.8
+		t.Errorf("defaultConfiguration.level: got %v want error", dc["level"])
+	}
+}
+
+// TestRuleCatalog_SeverityUsesPeakConfidence verifies a rule that fires at both a
+// high and a low confidence is rated by the highest hit, so a later low-confidence
+// match never down-rates the rule's catalog severity.
+func TestRuleCatalog_SeverityUsesPeakConfidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.sarif")
+	s := sarif.New(path, "")
+	lo := sampleFinding()
+	lo.Confidence = 0.30
+	lo.FilePath = "a.env"
+	hi := sampleFinding()
+	hi.Confidence = 0.90
+	hi.FilePath = "b.env"
+	// Emit the low-confidence finding FIRST so a naive first-seen catalog would
+	// under-rate the rule; the peak-confidence aggregation must override it.
+	_ = s.Emit(context.Background(), lo)
+	_ = s.Emit(context.Background(), hi)
+	_ = s.Close()
+
+	rule := firstRule(t, decode(t, path))
+	props := rule["properties"].(map[string]any)
+	if props["security-severity"] != "9.00" { // peak 0.90 * 10, not 0.30
+		t.Errorf("security-severity: got %v want 9.00 (peak)", props["security-severity"])
+	}
+	if rule["defaultConfiguration"].(map[string]any)["level"] != "error" {
+		t.Errorf("level should reflect peak confidence (error), got %v",
+			rule["defaultConfiguration"].(map[string]any)["level"])
+	}
+}
+
+// TestRuleCatalog_TagsUnionSorted verifies the rule catalog carries the
+// deduplicated, deterministically-sorted union of its findings' tags.
+func TestRuleCatalog_TagsUnionSorted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.sarif")
+	s := sarif.New(path, "")
+	f1 := sampleFinding()
+	f1.Tags = []string{"cloud", "aws"}
+	f1.FilePath = "a.env"
+	f2 := sampleFinding()
+	f2.Tags = []string{"aws", "credentials"} // overlapping + new
+	f2.FilePath = "b.env"
+	_ = s.Emit(context.Background(), f1)
+	_ = s.Emit(context.Background(), f2)
+	_ = s.Close()
+
+	rule := firstRule(t, decode(t, path))
+	tagsAny, ok := rule["properties"].(map[string]any)["tags"].([]any)
+	if !ok {
+		t.Fatal("expected tags on rule properties")
+	}
+	got := make([]string, len(tagsAny))
+	for i, v := range tagsAny {
+		got[i] = v.(string)
+	}
+	want := []string{"aws", "cloud", "credentials"} // deduped + sorted
+	if len(got) != len(want) {
+		t.Fatalf("tags: got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tags not deduped/sorted: got %v want %v", got, want)
+		}
+	}
+}
+
+// TestResult_SecuritySeverity verifies each result also carries a per-finding
+// security-severity property so individual alerts are sortable within a rule.
+func TestResult_SecuritySeverity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.sarif")
+	s := sarif.New(path, "")
+	f := sampleFinding()
+	f.Confidence = 0.50
+	_ = s.Emit(context.Background(), f)
+	_ = s.Close()
+
+	res := firstRun(t, decode(t, path))["results"].([]any)[0].(map[string]any)
+	props := res["properties"].(map[string]any)
+	if props["security-severity"] != "5.00" { // 0.50 * 10
+		t.Errorf("result security-severity: got %v want 5.00", props["security-severity"])
+	}
+}
+
+// TestSecuritySeverity_Bounds verifies confidence is clamped onto the [0,10] axis
+// and formatted with stable two-decimal precision (never scientific notation).
+func TestSecuritySeverity_Bounds(t *testing.T) {
+	cases := []struct {
+		conf float64
+		want string
+	}{
+		{1.0, "10.00"},
+		{0.0, "0.00"},
+		{0.123, "1.23"},
+		{1.5, "10.00"},  // clamped high
+		{-0.2, "0.00"},  // clamped low
+		{0.001, "0.01"}, // small but non-zero, two decimals
+	}
+	for _, tc := range cases {
+		path := filepath.Join(t.TempDir(), "out.sarif")
+		s := sarif.New(path, "")
+		f := sampleFinding()
+		f.Confidence = tc.conf
+		_ = s.Emit(context.Background(), f)
+		_ = s.Close()
+
+		rule := firstRule(t, decode(t, path))
+		got := rule["properties"].(map[string]any)["security-severity"]
+		if got != tc.want {
+			t.Errorf("confidence %.3f: security-severity %v, want %v", tc.conf, got, tc.want)
+		}
+	}
+}
+
 // TestClose_NoRawSecretLeak guards the never-store-raw invariant: the SARIF body
 // is built solely from the redacted Finding, which has no raw field.
 func TestClose_NoRawSecretLeak(t *testing.T) {
