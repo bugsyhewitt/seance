@@ -400,12 +400,45 @@ seance \
 | `--webhook-url` | Endpoint each finding is `POST`ed to as JSON. Empty (default) disables the webhook sink. |
 | `--webhook-header KEY:VALUE` | Header added to every request. **Repeatable.** Only the first `:` is the separator, so values may contain colons (e.g. `Authorization:Bearer x:y`). |
 | `--webhook-min-confidence` | Only findings with `confidence` at or above this value (0.0–1.0) are sent. Defaults to `0` (alert on everything). Tune it against the confidence score to trade recall for signal. |
+| `--webhook-format` | POST body shape: `json` (the redacted `Finding` object, default), `slack`, or `discord`. `slack`/`discord` render the redacted finding into the message envelope each platform's incoming webhook expects, so `--webhook-url` can point straight at a Slack or Discord webhook with no relay. An unknown value fails the run at startup. |
+
+#### Slack & Discord (`--webhook-format`)
+
+The default `json` body is the raw redacted `Finding` — ideal for a custom relay
+or a SIEM. But the two channels operators most want to page, **Slack** and
+**Discord**, do not accept an arbitrary JSON object: each incoming webhook
+expects a specific message envelope (`{"text": …}` for Slack, `{"content": …}`
+for Discord). Pointing `--webhook-url` straight at a Slack/Discord webhook with
+the default body produces a silent rejection and no alert.
+
+`--webhook-format slack` (or `discord`) renders each finding into the envelope
+the target platform expects — a short, human-readable, **fully redacted**
+summary (rule, repo, file/line, the redacted value, confidence, fingerprint) —
+so you can wire the webhook directly with no relay in between:
+
+```bash
+# Page a Slack channel directly — no relay service needed.
+seance \
+  --webhook-url https://hooks.slack.com/services/T000/B000/XXXX \
+  --webhook-format slack \
+  --webhook-min-confidence 0.85
+
+# Or a Discord channel.
+seance \
+  --webhook-url https://discord.com/api/webhooks/000/XXXX \
+  --webhook-format discord
+```
+
+The `slack`/`discord` envelopes carry only the same redacted/locator fields as
+every other sink — the never-emit-raw-secrets invariant holds for them too. The
+default (`json`) body is unchanged, so existing endpoints keep working.
 
 Behavior and guarantees:
 
-- **Same body, fully redacted.** The POST body is exactly the NDJSON `Finding`
+- **Same body, fully redacted.** The default JSON POST body is exactly the NDJSON `Finding`
   object shown above. Because `Finding` has no raw field, the never-emit-raw-
-  secrets invariant holds for the webhook for free.
+  secrets invariant holds for the webhook for free — and equally for the
+  `slack`/`discord` envelopes, which render only redacted fields.
 - **Content type** is `application/json`; configured headers are applied to every
   request.
 - **Non-blocking.** Findings are handed to a bounded in-memory queue drained by a
@@ -418,9 +451,11 @@ Behavior and guarantees:
   `alerts_failed_total`, and `alerts_dropped_total` so you can see delivery
   health at a glance.
 
-This is a generic webhook. Slack/Discord/Telegram-specific message formatters can
-sit as a thin relay in front of it, or land later as additional sinks — the
-output layer fans out to any number of sinks.
+Built-in `slack` and `discord` formats (see `--webhook-format` above) cover the
+two channels operators reach for most, with no relay required. Other targets
+(Telegram, a bespoke SIEM shape) can still sit as a thin relay in front of the
+default `json` body, or land later as additional formats — the output layer fans
+out to any number of sinks.
 
 ### Deduplication & suppression
 

@@ -20,7 +20,6 @@ package webhook
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,6 +48,11 @@ type Config struct {
 	// MinConfidence gates alerting: only Findings with Confidence >= this value
 	// are POSTed. 0 means alert on everything.
 	MinConfidence float64
+	// Format selects how each Finding is rendered into the POST body: FormatJSON
+	// (the redacted Finding object, default), FormatSlack (`{"text": ...}`), or
+	// FormatDiscord (`{"content": ...}`). The zero value ("") is treated as
+	// FormatJSON, preserving the original behavior.
+	Format Format
 	// QueueSize overrides the bounded queue depth. 0 uses defaultQueueSize.
 	QueueSize int
 	// Timeout overrides the per-request timeout. 0 uses defaultTimeout.
@@ -66,6 +70,7 @@ type Sink struct {
 	url     string
 	headers map[string]string
 	minConf float64
+	format  Format
 	client  *http.Client
 	errLog  io.Writer
 
@@ -102,10 +107,16 @@ func New(cfg Config) *Sink {
 		headers[k] = v
 	}
 
+	format := cfg.Format
+	if format == "" {
+		format = FormatJSON
+	}
+
 	s := &Sink{
 		url:     cfg.URL,
 		headers: headers,
 		minConf: cfg.MinConfidence,
+		format:  format,
 		client:  client,
 		errLog:  cfg.ErrLog,
 		queue:   make(chan output.Finding, qsize),
@@ -150,7 +161,7 @@ func (s *Sink) worker() {
 
 // post performs a single POST. All errors are non-fatal: logged and counted.
 func (s *Sink) post(finding output.Finding) {
-	body, err := json.Marshal(finding)
+	body, err := renderBody(s.format, finding)
 	if err != nil {
 		s.failed.Add(1)
 		s.logf("séance webhook: marshal error: %v", err)
