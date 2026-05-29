@@ -103,6 +103,22 @@ type Config struct {
 	// "discord" (a Discord-compatible {"content": ...} envelope). Slack/Discord
 	// let --webhook-url point straight at an incoming webhook with no relay.
 	WebhookFormat string `yaml:"webhook_format"`
+
+	// WebhookListenAddr is the TCP address on which séance runs an inbound GitHub
+	// push-webhook receiver, e.g. ":8099" or "127.0.0.1:8099". When non-empty,
+	// séance starts a webhookrecv provider that acts on each push delivery the
+	// instant it arrives — no polling, no rate-limit budget, near-zero latency.
+	// This is additive: it fans CommitEvents into the same pipeline as the global
+	// events stream and the --watch search provider.
+	// Empty disables the receiver (default).
+	WebhookListenAddr string `yaml:"webhook_listen_addr"`
+
+	// WebhookListenSecret is the HMAC-SHA256 secret configured on the GitHub
+	// webhook ("Secret" field). When non-empty, every delivery's
+	// X-Hub-Signature-256 is verified before the body is parsed. Running without
+	// a secret is allowed (private-network / sidecar deployments) but séance logs
+	// a warning. Ignored when WebhookListenAddr is empty.
+	WebhookListenSecret string `yaml:"webhook_listen_secret"`
 }
 
 // Defaults returns a Config with sensible defaults.

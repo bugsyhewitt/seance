@@ -47,6 +47,8 @@ func init() {
 	rootCmd.PersistentFlags().Float64Var(&cfg.WebhookMinConfidence, "webhook-min-confidence", cfg.WebhookMinConfidence, "only POST findings with confidence at or above this threshold (0.0-1.0)")
 	rootCmd.PersistentFlags().StringVar(&cfg.WebhookFormat, "webhook-format", cfg.WebhookFormat, "webhook POST body shape: 'json' (redacted Finding object, default), 'slack' ({\"text\":...} envelope), or 'discord' ({\"content\":...} envelope); slack/discord let --webhook-url point straight at an incoming webhook with no relay")
 	rootCmd.PersistentFlags().BoolVar(&cfg.TUI, "tui", cfg.TUI, "render a live, confidence-colored terminal feed of findings instead of raw NDJSON on stdout; falls back to NDJSON automatically when stdout is not a TTY")
+	rootCmd.PersistentFlags().StringVar(&cfg.WebhookListenAddr, "webhook-listen", cfg.WebhookListenAddr, "TCP address on which séance listens for inbound GitHub push webhooks (e.g. ':8099' or '127.0.0.1:8099'); when set, every push delivery is scanned immediately with no polling or rate-limit cost — additive alongside the global events stream and --watch; empty disables the receiver")
+	rootCmd.PersistentFlags().StringVar(&cfg.WebhookListenSecret, "webhook-listen-secret", cfg.WebhookListenSecret, "HMAC-SHA256 secret configured on the GitHub webhook 'Secret' field; when set, every delivery's X-Hub-Signature-256 is verified before the body is parsed; running without a secret is allowed but séance logs a warning")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
