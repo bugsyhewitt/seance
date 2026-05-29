@@ -6,6 +6,29 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**SARIF GitHub code-scanning severity enrichment** (output/sarif)
+- The SARIF 2.1.0 report now enriches its `tool.driver.rules[]` catalog so GitHub
+  Advanced Security / code scanning can triage séance's output **natively**. Each
+  rule gains a `helpUri`, a `defaultConfiguration.level`, the deduplicated and
+  deterministically-sorted union of its findings' `tags`, and a
+  `properties["security-severity"]` numeric string.
+- `security-severity` maps séance's `0–1` confidence onto GitHub's `"0.0"`–`"10.0"`
+  CVSS-style axis (`confidence × 10`, clamped, two decimals). Code scanning reads
+  it to bucket alerts into **Critical / High / Medium / Low** and to enforce
+  severity-gated branch protection — previously every séance finding landed in the
+  GitHub UI unclassified.
+- A rule's catalog severity reflects the **highest-confidence** finding that matched
+  it, so a later low-confidence hit can never down-rate it. Each individual `result`
+  also carries its own `properties["security-severity"]`, so alerts are sortable by
+  severity even within a single rule.
+- Purely additive to the SARIF document; the redacted-only body and the
+  never-store-raw invariant are unchanged (severity is derived from confidence, not
+  from any secret material).
+- Tests: `internal/output/sarif/sink_test.go` adds catalog security-severity +
+  helpUri + defaultConfiguration, peak-confidence severity selection, sorted/deduped
+  tag union, per-result security-severity, and `[0,10]` clamping/precision bounds
+  (10 → 15 tests in the package).
+
 **Per-rule confidence override (`confidence`)** (scan engine, ruleset)
 - New optional `confidence` field on a rule (gitleaks-format TOML) sets that
   rule's **base** confidence score, overriding the engine default of `0.80`. A
