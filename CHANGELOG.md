@@ -6,6 +6,51 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Ruleset pre-flight validator (`seance rules validate`)** (cmd + ruleset)
+- New `rules validate` cobra subcommand and a reusable `ruleset.Validate`
+  function that surface the ruleset defects the scan engine *silently tolerates*
+  at runtime. The engine is fail-safe by design — a rule whose `regex` does not
+  compile, or an `allowlist` whose `regexes`/`paths` pattern does not compile, is
+  silently skipped at scan time so a bad edit can never crash a run-for-days
+  monitor (`engine.go` swallows every `regexp.Compile` error). The cost of that
+  posture is that a typo silently disables detection with no signal; the only
+  symptom is a quiet stream of zero findings the operator may not notice for
+  days. This is the pre-flight counterpart that makes the defect visible at edit
+  time instead.
+- `ruleset.Validate(rs)` returns a sorted list of `Problem`s with severity
+  `error` or `warning`. **Errors:** empty/uncompilable `regex` (silently skipped
+  by the engine), uncompilable allowlist `regexes`/`paths` pattern (silently
+  skipped, so the false positive it meant to suppress fires), missing or
+  duplicate rule `id`, and a `secretGroup` that is negative or exceeds the
+  regex's capture-group count (the engine would fall back to the full match and
+  over-redact). **Warnings:** a rule with no `keywords` (its regex runs against
+  every line — a performance and false-positive hazard the default set always
+  avoids) and an impossible `entropy` floor `> 8.0` bits/byte (the rule can never
+  fire). `stopwords` and `commits` are literal/prefix axes and are never
+  compiled, so regex-special characters in them are correctly *not* flagged.
+- `seance rules validate [path ...]`: with no argument it validates the
+  configured `--signatures` file; each argument may be a TOML file or a directory
+  (every `*.toml` within it is validated, non-recursively). CI-friendly exit
+  status: **0** when there are no errors (warnings alone do not fail), **1** when
+  any error is found, **2** when a file cannot be read or parsed. Drops into a
+  pre-commit hook or CI step to catch a broken rule before it reaches a running
+  monitor; pairs naturally with the SIGHUP hot-reload workflow (validate, then
+  reload).
+- Purely additive: `rules` is a new subcommand group, so the bare `seance`
+  invocation still launches the scan pipeline unchanged. No new dependencies
+  (stdlib `regexp` + the existing cobra/toml deps), no architecture change, and
+  the never-store-raw invariant is untouched (the validator only inspects rule
+  *patterns*, never any secret material).
+- Tests: `internal/scan/ruleset/validate_test.go` (clean ruleset, the shipped
+  default ruleset validates clean, bad/empty regex, missing/duplicate id, bad
+  allowlist regex + path, literal stopwords/commits not flagged, secretGroup
+  in/out of range + negative, missing-keywords + impossible-entropy warnings,
+  multi-problem reporting, stable sort, `Problem.String`/`HasErrors`) plus
+  `cmd/seance/rules_test.go` (clean→exit 0, errors→exit 1, warnings-only→exit 0,
+  unparseable→exit 2, missing file→exit 2, directory expansion ignoring non-TOML,
+  the real default ruleset validates clean through the CLI path, and path
+  dedup/sort). `-race` clean.
+
 **Honor `regexes`, `paths`, and `commits` allowlist axes** (scan engine)
 - The `ruleset.AllowList` struct has carried `Regexes`, `Paths`, and `Commits`
   fields since v0.1 — declared, documented as gitleaks-compatible, and parsed
