@@ -457,6 +457,43 @@ two channels operators reach for most, with no relay required. Other targets
 default `json` body, or land later as additional formats — the output layer fans
 out to any number of sinks.
 
+### Inbound webhook receiver (`--webhook-listen`)
+
+For the lowest possible latency — and zero polling/rate-limit cost — séance can
+act as the **receiving** end of a GitHub push webhook instead of (or alongside)
+polling the public events stream.
+
+```bash
+seance \
+  --token $GITHUB_TOKEN \
+  --webhook-listen :8099 \
+  --webhook-listen-secret $GITHUB_WEBHOOK_SECRET
+```
+
+Configure the GitHub webhook to deliver `push` events to
+`http(s)://<your-host>:8099/webhook`. Every delivery is scanned the instant it
+arrives — no poll interval, no Events API quota consumed.
+
+`--webhook-listen` is **additive**: it fans `CommitEvents` into the same pipeline
+as the global events stream and `--watch`. All existing sinks (stdout NDJSON, TUI,
+`--output-file`, `--sarif-file`, `--webhook-url`) receive findings from inbound
+webhooks exactly like any other source.
+
+#### HMAC verification (`--webhook-listen-secret`)
+
+When `--webhook-listen-secret` is set, séance verifies every delivery's
+`X-Hub-Signature-256` header before parsing the body. Set the same value in the
+GitHub webhook **Secret** field. Deliveries with a missing or incorrect signature
+are rejected with `403 Forbidden` — the body is never read.
+
+Running without a secret is allowed (private-network or sidecar deployments where
+the listener is not internet-facing) but séance logs a warning at startup.
+
+| Flag | Description |
+|---|---|
+| `--webhook-listen ADDR` | TCP address to listen on, e.g. `:8099` or `127.0.0.1:8099`. Empty (default) disables the receiver. |
+| `--webhook-listen-secret SECRET` | HMAC-SHA256 secret matching the GitHub webhook Secret field. Empty skips signature verification (with a logged warning). |
+
 ### Deduplication & suppression
 
 At firehose volume, alert fatigue is the failure mode that gets a monitor turned

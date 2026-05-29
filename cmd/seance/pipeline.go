@@ -17,6 +17,7 @@ import (
 	"github.com/bugsyhewitt/seance/internal/ingestion"
 	ghprovider "github.com/bugsyhewitt/seance/internal/ingestion/github"
 	searchprovider "github.com/bugsyhewitt/seance/internal/ingestion/search"
+	webhookrecvprovider "github.com/bugsyhewitt/seance/internal/ingestion/webhookrecv"
 	"github.com/bugsyhewitt/seance/internal/output"
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
@@ -356,6 +357,16 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	providers := []ingestion.Provider{provider}
 	if searchProv != nil {
 		providers = append(providers, searchProv)
+	}
+	// Optional scan-on-push webhook receiver. When --webhook-listen is set,
+	// séance runs an inbound HTTP server that scans GitHub push deliveries the
+	// instant they arrive — no polling, no rate-limit budget, near-zero latency.
+	// It is additive: its CommitEvents fan into the same pipeline as the events
+	// stream and the search provider. With --webhook-listen unset it is absent
+	// entirely and the events-only path is byte-for-byte unchanged.
+	if c.WebhookListenAddr != "" {
+		recvProv := webhookrecvprovider.New(c.WebhookListenAddr, "", c.WebhookListenSecret)
+		providers = append(providers, recvProv)
 	}
 	events, errs := mergeProviders(ctx, providers...)
 	for {
