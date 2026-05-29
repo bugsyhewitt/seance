@@ -105,15 +105,20 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		if herr != nil {
 			return fmt.Errorf("webhook header: %w", herr)
 		}
+		format, ferr := webhook.ParseFormat(c.WebhookFormat)
+		if ferr != nil {
+			return fmt.Errorf("webhook format: %w", ferr)
+		}
 		webhookSink = webhook.New(webhook.Config{
 			URL:           c.WebhookURL,
 			Headers:       headers,
 			MinConfidence: c.WebhookMinConfidence,
+			Format:        format,
 			ErrLog:        os.Stderr,
 		})
 		sinks = append(sinks, webhookSink)
-		fmt.Fprintf(os.Stderr, "séance: webhook alerting enabled — POSTing findings (confidence >= %.2f) to %s\n",
-			c.WebhookMinConfidence, c.WebhookURL)
+		fmt.Fprintf(os.Stderr, "séance: webhook alerting enabled — POSTing findings (confidence >= %.2f, format=%s) to %s\n",
+			c.WebhookMinConfidence, format, c.WebhookURL)
 	}
 	for _, s := range sinks {
 		defer s.Close()

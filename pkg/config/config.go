@@ -98,6 +98,11 @@ type Config struct {
 	WebhookURL           string   `yaml:"webhook_url"`
 	WebhookHeaders       []string `yaml:"webhook_headers"`        // each "Key:Value"
 	WebhookMinConfidence float64  `yaml:"webhook_min_confidence"` // only alert at/above this score
+	// WebhookFormat selects the POST body shape: "json" (the redacted Finding
+	// object, default), "slack" (a Slack-compatible {"text": ...} envelope), or
+	// "discord" (a Discord-compatible {"content": ...} envelope). Slack/Discord
+	// let --webhook-url point straight at an incoming webhook with no relay.
+	WebhookFormat string `yaml:"webhook_format"`
 }
 
 // Defaults returns a Config with sensible defaults.
