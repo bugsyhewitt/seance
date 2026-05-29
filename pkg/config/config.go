@@ -122,6 +122,18 @@ type Config struct {
 	OutputFormat string `toml:"output_format" yaml:"output_format"` // "json" (default) | "text"
 	OutputPath   string `toml:"output_path" yaml:"output_path"`     // "-" for stdout
 
+	// OutputMaxBytes bounds the size of the --output-file NDJSON record by
+	// rotating it. séance's intended deployment is a run-forever monitor, where
+	// the append-only --output-file grows without limit and eventually fills the
+	// disk. When OutputMaxBytes > 0 the active file is rotated before any write
+	// that would carry it past this size: the active file is renamed to
+	// <path>.1 (shifting older generations up, keeping a small fixed number) and
+	// a fresh file is opened. Total on-disk footprint is therefore bounded to
+	// roughly (kept_generations + 1) * OutputMaxBytes. 0 (the default) disables
+	// rotation — byte-for-byte the prior append-forever behaviour. Ignored unless
+	// --output-file names a real file (not stdout).
+	OutputMaxBytes int64 `toml:"output_max_bytes" yaml:"output_max_bytes"`
+
 	// SarifPath is an optional path to which séance writes a SARIF 2.1.0 document
 	// of all findings observed during the run. SARIF (the OASIS Static Analysis
 	// Results Interchange Format) is ingestible by GitHub Advanced Security / code

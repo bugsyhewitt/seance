@@ -92,6 +92,8 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.OutputFormat = parsed.OutputFormat
 		case "output-file":
 			out.OutputPath = parsed.OutputPath
+		case "output-max-bytes":
+			out.OutputMaxBytes = parsed.OutputMaxBytes
 		case "sarif-file":
 			out.SarifPath = parsed.SarifPath
 		case "state-dir":
@@ -139,6 +141,7 @@ func init() {
 	rootCmd.PersistentFlags().StringArrayVar(&cfg.DisableRules, "disable-rule", cfg.DisableRules, "rule ID to disable (repeatable) — the listed rules are dropped from the loaded ruleset; applied after --enable-rule and always wins over it; silence a noisy rule without editing --signatures")
 	rootCmd.PersistentFlags().StringVar(&cfg.OutputFormat, "output", cfg.OutputFormat, "stdout streaming format: 'json' (newline-delimited JSON, the default) or 'text' (one compact human-readable line per finding, grep-friendly); for a SARIF report use --sarif-file; ignored when --tui takes over an interactive stdout")
 	rootCmd.PersistentFlags().StringVar(&cfg.OutputPath, "output-file", cfg.OutputPath, "also append redacted NDJSON findings to this file (created with its parent dir; append mode); '-' or empty means stdout only — pairs with --tui to keep a machine-readable record while watching the live feed")
+	rootCmd.PersistentFlags().Int64Var(&cfg.OutputMaxBytes, "output-max-bytes", cfg.OutputMaxBytes, "rotate the --output-file when it would exceed this many bytes: the active file is renamed to <file>.1 (older generations shift up, a few are kept) and a fresh file is opened, bounding total disk for a run-forever monitor; 0 (default) appends forever; ignored unless --output-file names a real file")
 	rootCmd.PersistentFlags().StringVar(&cfg.SarifPath, "sarif-file", cfg.SarifPath, "also write a SARIF 2.1.0 report of all findings to this file (ingestible by GitHub code scanning and other SARIF tools); written once on shutdown; empty disables it")
 	rootCmd.PersistentFlags().StringVar(&cfg.StateDir, "state-dir", cfg.StateDir, "directory for persistent state")
 	rootCmd.PersistentFlags().IntVar(&cfg.PollIntervalSec, "poll-interval", cfg.PollIntervalSec, "poll interval in seconds")

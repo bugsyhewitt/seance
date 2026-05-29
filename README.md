@@ -308,6 +308,7 @@ watch_interval_sec = 90              # --watch poll cadence; 0 keeps the default
 # Durable record + live feed
 tui               = true
 output_path       = "/var/log/seance/findings.ndjson"
+output_max_bytes  = 26214400          # rotate at 25 MiB; 0 appends forever
 sarif_path        = "/var/log/seance/findings.sarif"
 
 # Real-time alerting
@@ -468,6 +469,7 @@ seance --output-file logs/seance.ndjson | jq 'select(.confidence > 0.9)'
 | Flag | Description |
 |------|-------------|
 | `--output-file` | Append redacted NDJSON findings to this file in addition to stdout. The parent directory is created if missing. `-` or empty (default) means stdout only. |
+| `--output-max-bytes` | Rotate the `--output-file` once it would exceed this many bytes, bounding total disk for a run-forever monitor. `0` (default) appends forever. Ignored unless `--output-file` names a real file. |
 
 Behavior and guarantees:
 
@@ -479,6 +481,36 @@ Behavior and guarantees:
   séance extends the record instead of erasing prior findings.
 - **Auto-created path.** A missing parent directory is created
   (`--output-file logs/seance.ndjson` works without a prior `mkdir`).
+
+#### Bounded growth — size-based rotation (`--output-max-bytes`)
+
+séance is built to run forever. Left unbounded, an append-only `--output-file`
+grows until it fills the disk. `--output-max-bytes` rotates the file in place so
+the on-disk record stays bounded with **no external logrotate**:
+
+```bash
+# Keep a durable NDJSON record, but never let it exceed ~100 MiB total on disk.
+seance --output-file logs/seance.ndjson --output-max-bytes 26214400  # 25 MiB per file
+```
+
+When the active file would grow past the limit on the next finding, séance:
+
+1. closes the active file and renames it to `<file>.1`,
+2. shifts older generations up (`<file>.1` → `<file>.2`, …), keeping the **3 most
+   recent** rotated generations and discarding anything older, and
+3. opens a fresh active file and continues writing.
+
+So total disk is bounded to roughly **4 × `--output-max-bytes`** (the active file
+plus three retained generations). Notes:
+
+- **No finding is ever split or lost.** Rotation happens *before* a line is
+  written, so each finding lands wholly in one file. A single finding larger than
+  the whole budget is still written intact (it just lands in a fresh file).
+- **Rotation accounts for prior runs.** The threshold is measured against the
+  file's real on-disk size, so a sink reopened on a near-full file rotates on its
+  first write rather than overshooting.
+- **`0` (default) disables rotation** — byte-for-byte the prior append-forever
+  behaviour. Negative values are rejected (a typo, not a tiny file).
 
 ### SARIF report (`--sarif-file`)
 
