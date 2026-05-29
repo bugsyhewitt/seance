@@ -329,6 +329,9 @@ webhook_format         = "slack"
 suppress_file = "/etc/seance/suppress.txt"
 state_dir     = "/var/lib/seance"
 seen_ttl_days = 7
+
+# Global outbound throttle
+rate_limit    = 0                     # aggregate req/s cap across every HTTP surface; 0 = no cap
 ```
 
 No new dependency is introduced — the file is parsed with the same TOML library
@@ -566,6 +569,61 @@ Behavior and guarantees:
   scan).
 - A negative value is rejected at startup (a typo, not a sub-zero cap); `0`
   imposes no cap — byte-for-byte the prior behavior.
+
+### Global outbound rate-limit (`--rate-limit`)
+
+séance fans GitHub API calls out across **three independent HTTP surfaces** —
+the events provider, the targeted `--watch` Search-API provider, and the diff
+fetcher — each with its own client and its own adaptive backoff. Those
+per-surface backoffs (X-RateLimit-Remaining / X-Poll-Interval) keep each surface
+inside *its own* quota, but they are mutually blind: a noisy `--watch` keyword
+set polling Search-API alongside a force-push-heavy fetcher and the events
+stream can collectively burst far above what a shared token (or a downstream
+proxy) is willing to absorb. `--rate-limit` is the single dial that caps the
+**total** outbound request rate across all three surfaces in one place.
+
+```bash
+# Hard ceiling of 5 requests/second across every séance HTTP surface combined.
+seance --rate-limit 5
+
+# Share a token with another tool: keep séance to half the budget.
+seance --token "$GITHUB_TOKEN" --watch acme-corp --rate-limit 8
+```
+
+| Flag | Description |
+|------|-------------|
+| `--rate-limit` | Cap the **aggregate** outbound request rate, in requests per second, across the events poller, the Search-API provider, and the diff fetcher with a single shared token bucket. `0` (default) disables the cap entirely. |
+
+Behavior and guarantees:
+
+- **One bucket, every surface.** A single shared token-bucket limiter is
+  installed on every séance HTTP client at startup. Each outbound request takes
+  one token; if none is available the request blocks until one accrues, or
+  until SIGINT/SIGTERM cancels the run. The fairness across the three clients
+  is naturally what stdlib channel-receive scheduling provides — no one surface
+  can starve the others.
+- **Bounded burst.** The burst size is bounded to `ceil(rate-limit)` so a quiet
+  period cannot amortise into an unbounded spike. `--rate-limit 5` means *up to
+  5 requests in any one-second window after quiescence*, not "unbounded burst
+  followed by 5/s".
+- **Cancellable.** A request blocked waiting for a token returns immediately
+  on context cancellation (SIGINT/SIGTERM), so shutdown is never delayed by a
+  pending throttle wait.
+- **Composes with per-surface backoff.** Each provider's existing adaptive
+  backoff still runs unchanged; `--rate-limit` is a hard ceiling on top, never
+  a floor. If the events poller's adaptive cadence is already inside the cap,
+  the limiter is a no-op; when the cap binds, the per-surface backoffs simply
+  see the throttled rate as the actual rate.
+- **Inbound webhook deliveries are unaffected.** `--webhook-listen` is a
+  server, not an outbound caller; its delivery latency must not depend on the
+  outbound budget, so the limiter does not touch it.
+- **Observable.** The stderr metrics line gains `rate_limit_throttled_total`,
+  the number of outbound requests that had to wait for a token. If it stays
+  at `0`, the cap is not binding — your configured rate is higher than your
+  actual throughput.
+- A negative value is rejected at startup (a typo, not a sub-zero rate);
+  `0` (the default) disables the cap entirely — no limiter is constructed and
+  the prior behaviour is preserved byte-for-byte.
 
 ### SARIF report (`--sarif-file`)
 
@@ -1245,6 +1303,7 @@ séance metrics ts=1234567890 push_events_total=454 force_pushes_total=3 \
   findings_after_limit_total=0 \
   placeholders_dropped_total=11 \
   seen_commits_tracked=412 seen_findings_tracked=6 \
+  rate_limit_throttled_total=0 \
   push_events_hr=1602.3 prefilter_survival_pct=89.2 fetches_hr=1429.3 \
   polls_hr=60.0 rate_limit_remaining=4592 rate_limit_reset_in=1981
 ```
@@ -1276,6 +1335,13 @@ filter is set.
 `--output-limit` cap was reached but before the shutdown completed (see
 [Bounded run](#bounded-run--finding-cap---output-limit)). It stays at `0` unless
 an output limit is set.
+
+`rate_limit_throttled_total` counts outbound HTTP requests that had to wait
+for a token from the shared `--rate-limit` bucket (see
+[Global outbound rate-limit](#global-outbound-rate-limit---rate-limit)). It
+stays at `0` unless `--rate-limit` is set; once set, a value of `0` after
+warm-up means the cap is not binding (your configured rate is higher than your
+actual throughput).
 
 `placeholders_dropped_total` counts matches dropped by the global
 placeholder/dummy-value filter — documentation samples, masks, and `your_key`

@@ -100,6 +100,17 @@ func NewWithBaseURL(token, baseURL string) *Provider {
 // Name implements ingestion.Provider.
 func (p *Provider) Name() string { return "github" }
 
+// SetHTTPClient overrides the provider's HTTP client. Used to install a shared
+// rate-limiting transport (--rate-limit) on top of the default 30s-timeout
+// client. A nil client is ignored. Call before Stream so the poll loop picks
+// up the new client on its first request.
+func (p *Provider) SetHTTPClient(c *http.Client) {
+	if c == nil {
+		return
+	}
+	p.client = c
+}
+
 // SeedETag primes the provider with an ETag persisted from a previous run so the
 // first poll after a restart is a conditional request (If-None-Match) rather than
 // a full cold fetch. A blank value is ignored (a fresh start still works). Call

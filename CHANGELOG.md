@@ -6,6 +6,48 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Global outbound rate-limit (`--rate-limit`)** (throttle, fetch, ingestion, config, cmd)
+- New `--rate-limit` flag (and `rate_limit` config key) caps the **aggregate**
+  outbound request rate, in requests per second, across **every** séance HTTP
+  surface — the events provider, the targeted `--watch` Search-API provider,
+  and the diff fetcher — with a single shared token bucket. Each surface's own
+  adaptive backoff (X-RateLimit-Remaining / X-Poll-Interval) keeps that surface
+  inside its own quota, but those backoffs are mutually blind: a noisy `--watch`
+  set polling Search-API alongside a force-push-heavy fetcher and the events
+  stream can collectively burst above what a shared token (or a downstream
+  proxy) is willing to absorb. `--rate-limit` is the single dial that caps
+  total throughput across all three surfaces in one place.
+- Implemented as a hand-rolled token-bucket `http.RoundTripper` in a new
+  `internal/throttle` package (no new module dependencies — `golang.org/x/time/rate`
+  would have added a dep for ~40 lines of arithmetic). The burst is bounded to
+  `ceil(rate-limit)` so a quiet period cannot amortise into an unbounded spike;
+  "5 req/s" means *up to 5 in any one-second window after quiescence*, not
+  "unbounded burst followed by 5/s".
+- Cancellable: a request blocked waiting for a token returns immediately on
+  context cancellation (SIGINT/SIGTERM), so shutdown is never delayed by a
+  pending throttle wait. The fairness across the three clients is naturally
+  what stdlib channel-receive scheduling provides — no one surface can starve
+  the others.
+- Inbound `--webhook-listen` deliveries are **unaffected**: that provider is a
+  server, not an outbound caller, and its delivery latency must not depend on
+  the outbound budget.
+- New `rate_limit_throttled_total` counter on the stderr `key=value` metrics
+  line tracks how many outbound requests had to wait for a token, so the
+  operator can tell whether `--rate-limit` is actually binding or just decorative.
+- `0` (the default) disables the cap entirely — no limiter is constructed and
+  the prior behaviour is preserved byte-for-byte. A negative value is rejected
+  at startup as a typo. Follows the `defaults < file < flags` precedence like
+  every other config field.
+- Tests: `internal/throttle/throttle_test.go` (rejects non-positive rate, burst
+  default, immediate-first-burst, throttle-after-burst, context-cancellation,
+  RoundTripper pass-through, end-to-end real-clock throttling, base-timeout
+  preservation, nil-limiter pass-through, shared limiter caps aggregate rate);
+  `internal/fetch/fetcher_test.go` adds `SetHTTPClient`-installs-rate-limiter
+  and nil-is-ignored coverage; `pkg/config/config_test.go` asserts TOML
+  decoding; `cmd/seance/config_test.go` asserts flag-beats-file precedence.
+  README documents the flag, the example, the bucket mechanics, the metric,
+  and the config-file key.
+
 **Bounded run — finding cap (`--output-limit`)** (scan engine, config, cmd)
 - New `--output-limit` flag (and `output_limit` config key) caps the total
   number of findings the run emits across **all** sinks. Targets two real

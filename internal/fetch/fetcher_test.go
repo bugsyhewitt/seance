@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bugsyhewitt/seance/internal/fetch"
 	"github.com/bugsyhewitt/seance/internal/ingestion"
+	"github.com/bugsyhewitt/seance/internal/throttle"
 )
 
 func TestGitHubFetcher_FetchCompare_RecoversOrphanedDiff(t *testing.T) {
@@ -63,6 +66,74 @@ func TestGitHubFetcher_FetchCompare_NoBeforeSHA(t *testing.T) {
 	}
 	if results != nil {
 		t.Errorf("expected nil results when BeforeSHA is empty, got %d", len(results))
+	}
+}
+
+// TestGitHubFetcher_SetHTTPClient_InstallsRateLimiter verifies the --rate-limit
+// integration point on the fetcher: a wrapped client installed via
+// SetHTTPClient must actually be consulted on every outbound request, throttling
+// burst traffic above the configured rate. This is the contract pipeline.go
+// relies on when it shares one limiter across the fetcher and providers.
+func TestGitHubFetcher_SetHTTPClient_InstallsRateLimiter(t *testing.T) {
+	fixture, _ := os.ReadFile("testdata/commit_abc123.json")
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	l := throttle.New(20, 1) // 20 req/s, burst 1 ⇒ ~50ms wait between requests
+	f := fetch.NewGitHubFetcher("", srv.URL)
+	f.SetHTTPClient(throttle.Wrap(l, nil))
+
+	event := ingestion.CommitEvent{
+		RepoOwner: "alice", RepoName: "my-project",
+		CommitSHA: "abc123def456abc123def456abc123def456abc1",
+	}
+	ref := ingestion.FileRef{Path: ".env", Status: "added"}
+
+	start := time.Now()
+	for i := 0; i < 3; i++ {
+		if _, err := f.Fetch(context.Background(), event, ref); err != nil {
+			t.Fatalf("Fetch #%d: %v", i, err)
+		}
+	}
+	elapsed := time.Since(start)
+
+	if atomic.LoadInt32(&hits) != 3 {
+		t.Errorf("hits=%d, want 3", hits)
+	}
+	if elapsed < 50*time.Millisecond {
+		t.Errorf("3 fetches at 20 req/s (burst 1) took only %v, expected the limiter to delay them", elapsed)
+	}
+	if got := atomic.LoadUint64(&l.ThrottledRequests); got < 2 {
+		t.Errorf("ThrottledRequests=%d, want >= 2 (2 of 3 requests should have waited)", got)
+	}
+}
+
+// TestGitHubFetcher_SetHTTPClient_NilIsIgnored verifies the defensive no-op:
+// SetHTTPClient(nil) keeps the original client rather than nil-ing it out,
+// which would crash the fetcher on the next request.
+func TestGitHubFetcher_SetHTTPClient_NilIsIgnored(t *testing.T) {
+	fixture, _ := os.ReadFile("testdata/commit_abc123.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	f := fetch.NewGitHubFetcher("", srv.URL)
+	f.SetHTTPClient(nil) // must not crash subsequent requests
+
+	event := ingestion.CommitEvent{
+		RepoOwner: "alice", RepoName: "my-project",
+		CommitSHA: "abc123def456abc123def456abc123def456abc1",
+	}
+	ref := ingestion.FileRef{Path: ".env", Status: "added"}
+	if _, err := f.Fetch(context.Background(), event, ref); err != nil {
+		t.Fatalf("Fetch after SetHTTPClient(nil): %v", err)
 	}
 }
 

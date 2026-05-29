@@ -134,6 +134,8 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.WebhookListenAddr = parsed.WebhookListenAddr
 		case "webhook-listen-secret":
 			out.WebhookListenSecret = parsed.WebhookListenSecret
+		case "rate-limit":
+			out.RateLimit = parsed.RateLimit
 		}
 	}
 	return out
@@ -168,6 +170,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&cfg.TUI, "tui", cfg.TUI, "render a live, confidence-colored terminal feed of findings instead of raw NDJSON on stdout; falls back to NDJSON automatically when stdout is not a TTY")
 	rootCmd.PersistentFlags().StringVar(&cfg.WebhookListenAddr, "webhook-listen", cfg.WebhookListenAddr, "TCP address on which séance listens for inbound GitHub push webhooks (e.g. ':8099' or '127.0.0.1:8099'); when set, every push delivery is scanned immediately with no polling or rate-limit cost — additive alongside the global events stream and --watch; empty disables the receiver")
 	rootCmd.PersistentFlags().StringVar(&cfg.WebhookListenSecret, "webhook-listen-secret", cfg.WebhookListenSecret, "HMAC-SHA256 secret configured on the GitHub webhook 'Secret' field; when set, every delivery's X-Hub-Signature-256 is verified before the body is parsed; running without a secret is allowed but séance logs a warning")
+	rootCmd.PersistentFlags().Float64Var(&cfg.RateLimit, "rate-limit", cfg.RateLimit, "cap the AGGREGATE outbound request rate (requests/second) across every séance HTTP surface — events poller, --watch Search-API provider, and diff fetcher — with a single shared token bucket; burst is capped at ceil(rate-limit); 0 (default) disables the cap entirely; useful when sharing a GitHub token, sitting behind a rate-limited proxy, or running in a tight budget; throttled requests are counted on the metrics line as rate_limit_throttled_total")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {

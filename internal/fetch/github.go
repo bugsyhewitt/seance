@@ -32,6 +32,17 @@ func NewGitHubFetcher(token, baseURL string) *GitHubFetcher {
 	}
 }
 
+// SetHTTPClient overrides the fetcher's HTTP client. Used to install a shared
+// rate-limiting transport (--rate-limit) on top of the default 30s-timeout
+// client. A nil client is ignored. Call before any Fetch/FetchAll/FetchCompare
+// so the first request goes through the new client.
+func (f *GitHubFetcher) SetHTTPClient(c *http.Client) {
+	if c == nil {
+		return
+	}
+	f.client = c
+}
+
 // Fetch retrieves the diff patch for a single file in a commit.
 func (f *GitHubFetcher) Fetch(ctx context.Context, event ingestion.CommitEvent, ref ingestion.FileRef) (FileContent, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/commits/%s",
