@@ -73,8 +73,8 @@ func TestEngine_FindsAWSKey(t *testing.T) {
 	engine := scan.New(rules, sink)
 
 	content := newContent(
-		"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
-		[]string{"+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+		"+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R\n",
+		[]string{"+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"},
 	)
 
 	n, err := engine.Scan(context.Background(), content)
@@ -88,12 +88,12 @@ func TestEngine_FindsAWSKey(t *testing.T) {
 	if redacted == "" {
 		t.Error("Redacted must not be empty")
 	}
-	// AKIAIOSFODNN7EXAMPLE is 20 chars (< minRevealLen=24), so expect fingerprint.
+	// AKIA2E4F6H8J0L2N4P6R is 20 chars (< minRevealLen=24), so expect fingerprint.
 	if !strings.HasPrefix(redacted, "sha256:") && !containsStars(redacted) {
 		t.Errorf("expected sha256 fingerprint or starred redaction, got %q", redacted)
 	}
 	// Must never contain raw secret material.
-	if strings.Contains(redacted, "AKIAIOSFODNN7EXAMPLE") {
+	if strings.Contains(redacted, "AKIA2E4F6H8J0L2N4P6R") {
 		t.Error("Redacted must not contain raw secret")
 	}
 }
@@ -175,7 +175,7 @@ func TestEngine_EntropyFilter_KeepHigh(t *testing.T) {
 	engine := scan.New(rules, &captureSink{findings: &findings})
 
 	// High-entropy value: looks like a real random base64 key
-	highEntropyLine := `secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`
+	highEntropyLine := `secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYz9q8s3T1uV"`
 	content := newContent(highEntropyLine, []string{highEntropyLine})
 	n, err := engine.Scan(context.Background(), content)
 	if err != nil {
@@ -200,8 +200,8 @@ func TestEngine_EntropyDisabled(t *testing.T) {
 	var findings []output.Finding
 	engine := scan.New(rules, &captureSink{findings: &findings})
 	content := newContent(
-		"+AKIAIOSFODNN7EXAMPLE",
-		[]string{"+AKIAIOSFODNN7EXAMPLE"},
+		"+AKIA2E4F6H8J0L2N4P6R",
+		[]string{"+AKIA2E4F6H8J0L2N4P6R"},
 	)
 	n, _ := engine.Scan(context.Background(), content)
 	if n != 1 {
@@ -226,7 +226,7 @@ func TestEngine_SecretGroup_ExtractsCapture(t *testing.T) {
 	var findings []output.Finding
 	engine := scan.New(rules, &captureSink{findings: &findings})
 
-	secret := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	secret := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYz9q8s3T1uV"
 	line := "aws_secret_access_key = " + secret
 	content := newContent(line, []string{line})
 
@@ -269,7 +269,7 @@ func TestEngine_Confidence_WithEntropy(t *testing.T) {
 	engine := scan.New(rules, &captureSink{findings: &findings})
 
 	// High-entropy key — well above the 3.5 threshold.
-	line := `key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY234"`
+	line := `key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYz9q8s3T1uV234"`
 	content := newContent(line, []string{line})
 	n, err := engine.Scan(context.Background(), content)
 	if err != nil {
@@ -307,7 +307,7 @@ func TestEngine_ReloadRules_SwapsActiveSet(t *testing.T) {
 		t.Fatalf("initial rule count: got %d, want 1", engine.RuleCount())
 	}
 
-	awsLine := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	awsLine := "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"
 	n, _ := engine.Scan(context.Background(), newContent(awsLine, []string{awsLine}))
 	if n != 1 {
 		t.Fatalf("aws rule before reload: got %d findings, want 1", n)
@@ -327,7 +327,7 @@ func TestEngine_ReloadRules_SwapsActiveSet(t *testing.T) {
 	}
 
 	// A GitHub PAT now matches the freshly loaded rule.
-	ghLine := "token = ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	ghLine := "token = ghp_x7Kp2mQ9vR4nT8wL3jF6dH1sB5cN0aZ9eYqW"
 	n, _ = engine.Scan(context.Background(), newContent(ghLine, []string{ghLine}))
 	if n != 1 {
 		t.Errorf("gh line after reload: got %d findings, want 1", n)
@@ -436,7 +436,7 @@ func TestEngine_Suppressor_DuplicateSuppressed(t *testing.T) {
 	engine := scan.New(awsRule(), &captureSink{findings: &findings}).
 		WithSuppressor(newMemSuppressor())
 
-	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	line := "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"
 	content := newContent(line, []string{line})
 
 	// First sighting: emitted.
@@ -470,7 +470,7 @@ func TestEngine_Suppressor_DistinctNotSuppressed(t *testing.T) {
 	engine := scan.New(awsRule(), &captureSink{findings: &findings}).
 		WithSuppressor(newMemSuppressor())
 
-	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	line := "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"
 
 	c1 := newContent(line, []string{line}) // repo "alice/repo" via newContent default
 	c2 := newContent(line, []string{line})
@@ -494,7 +494,7 @@ func TestEngine_Suppressor_SuppressListHonored(t *testing.T) {
 	// scanning once with no suppressor and reading it back from the sink.
 	var probe []output.Finding
 	probeEngine := scan.New(awsRule(), &captureSink{findings: &probe})
-	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	line := "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"
 	if _, err := probeEngine.Scan(context.Background(), newContent(line, []string{line})); err != nil {
 		t.Fatalf("probe scan: %v", err)
 	}
@@ -526,7 +526,7 @@ func TestEngine_Suppressor_SuppressListHonored(t *testing.T) {
 func TestEngine_Fingerprint_StampedOnFinding(t *testing.T) {
 	var findings []output.Finding
 	engine := scan.New(awsRule(), &captureSink{findings: &findings})
-	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	line := "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"
 	if _, err := engine.Scan(context.Background(), newContent(line, []string{line})); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestEngine_Fingerprint_StampedOnFinding(t *testing.T) {
 func TestEngine_NoSuppressor_EmitsEverything(t *testing.T) {
 	var findings []output.Finding
 	engine := scan.New(awsRule(), &captureSink{findings: &findings})
-	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	line := "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"
 	content := newContent(line, []string{line})
 	n1, _ := engine.Scan(context.Background(), content)
 	n2, _ := engine.Scan(context.Background(), content)
@@ -572,7 +572,7 @@ func TestEngine_Confidence_Bounded(t *testing.T) {
 	var findings []output.Finding
 	engine := scan.New(rules, &captureSink{findings: &findings})
 	// Real-looking GitHub PAT.
-	line := "token = ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	line := "token = ghp_x7Kp2mQ9vR4nT8wL3jF6dH1sB5cN0aZ9eYqW"
 	content := newContent(line, []string{line})
 	n, _ := engine.Scan(context.Background(), content)
 	if n == 1 && findings[0].Confidence > 1.0 {
@@ -778,5 +778,105 @@ func TestEngine_AllowList_InvalidRegexIgnored(t *testing.T) {
 	n, _ := engine.Scan(context.Background(), content)
 	if n != 1 {
 		t.Errorf("expected 1 finding (bad allowlist regex ignored), got %d", n)
+	}
+}
+
+// ── Global placeholder / dummy-value filter ──────────────────────────────────
+
+// awsRuleNoEntropy is a bare AWS rule with no per-rule allowlist and no entropy
+// gate, so the only thing that can drop a match is the global placeholder
+// filter — isolating it for these tests.
+func awsRuleNoEntropy() []ruleset.Rule {
+	return []ruleset.Rule{{
+		ID:       "aws-access-key-id",
+		Regex:    `AKIA[A-Z0-9]{16}`,
+		Keywords: []string{"AKIA"},
+	}}
+}
+
+// TestEngine_Placeholder_DropsExampleKey verifies that AWS's own documented
+// sample key (…EXAMPLE) is dropped by the global placeholder filter even with no
+// per-rule allowlist, and is counted in placeholders_dropped_total.
+func TestEngine_Placeholder_DropsExampleKey(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRuleNoEntropy(), &captureSink{findings: &findings})
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	n, err := engine.Scan(context.Background(), newContent(line, []string{line}))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if n != 0 || len(findings) != 0 {
+		t.Errorf("documented EXAMPLE key must be dropped: n=%d sink=%d", n, len(findings))
+	}
+	if got := engine.PlaceholderDroppedCount(); got != 1 {
+		t.Errorf("placeholders_dropped_total: got %d, want 1", got)
+	}
+}
+
+// TestEngine_Placeholder_DropsMonoRunMask verifies a zero/AAAA-style mask is
+// dropped by the mono-run signature with no per-rule config.
+func TestEngine_Placeholder_DropsMonoRunMask(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRuleNoEntropy(), &captureSink{findings: &findings})
+	line := "+AWS_ACCESS_KEY_ID=AKIAAAAAAAAAAAAAAAAA"
+	n, _ := engine.Scan(context.Background(), newContent(line, []string{line}))
+	if n != 0 {
+		t.Errorf("mono-run mask must be dropped, got %d findings", n)
+	}
+	if engine.PlaceholderDroppedCount() != 1 {
+		t.Errorf("placeholders_dropped_total: got %d, want 1", engine.PlaceholderDroppedCount())
+	}
+}
+
+// TestEngine_Placeholder_RealKeyPasses verifies the filter is conservative: a
+// realistic AWS key with no placeholder signature is emitted normally and not
+// counted as a placeholder drop.
+func TestEngine_Placeholder_RealKeyPasses(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRuleNoEntropy(), &captureSink{findings: &findings})
+	line := "+AWS_ACCESS_KEY_ID=AKIA2E4F6H8J0L2N4P6R"
+	n, _ := engine.Scan(context.Background(), newContent(line, []string{line}))
+	if n != 1 {
+		t.Errorf("real key must pass the placeholder filter, got %d findings", n)
+	}
+	if engine.PlaceholderDroppedCount() != 0 {
+		t.Errorf("real key must not be counted as a placeholder drop, got %d", engine.PlaceholderDroppedCount())
+	}
+}
+
+// TestEngine_Placeholder_OptOutTag verifies that a rule tagged
+// "no-placeholder-filter" bypasses the global filter — its placeholder-shaped
+// matches still fire.
+func TestEngine_Placeholder_OptOutTag(t *testing.T) {
+	rules := []ruleset.Rule{{
+		ID:       "aws-access-key-id",
+		Regex:    `AKIA[A-Z0-9]{16}`,
+		Keywords: []string{"AKIA"},
+		Tags:     []string{"no-placeholder-filter"},
+	}}
+	var findings []output.Finding
+	engine := scan.New(rules, &captureSink{findings: &findings})
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	n, _ := engine.Scan(context.Background(), newContent(line, []string{line}))
+	if n != 1 {
+		t.Errorf("opted-out rule should emit placeholder match, got %d findings", n)
+	}
+	if engine.PlaceholderDroppedCount() != 0 {
+		t.Errorf("opted-out rule must not increment placeholder counter, got %d", engine.PlaceholderDroppedCount())
+	}
+}
+
+// TestEngine_Placeholder_NoRawLeakOnDrop verifies the never-store-raw invariant
+// holds on the drop path: a suppressed placeholder produces no sink output at
+// all, so no raw material can escape via a dropped finding.
+func TestEngine_Placeholder_NoRawLeakOnDrop(t *testing.T) {
+	var findings []output.Finding
+	engine := scan.New(awsRuleNoEntropy(), &captureSink{findings: &findings})
+	line := "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+	if _, err := engine.Scan(context.Background(), newContent(line, []string{line})); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("dropped placeholder must emit nothing, got %d findings", len(findings))
 	}
 }

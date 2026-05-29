@@ -41,6 +41,11 @@ type Engine struct {
 	// suppressed counts findings dropped by the suppressor. Read atomically for
 	// the findings_suppressed_total metric.
 	suppressed uint64
+
+	// placeholderDropped counts candidate matches dropped by the global
+	// placeholder/dummy-value filter (documentation samples, masks, "your_key"
+	// stand-ins). Read atomically for the placeholders_dropped_total metric.
+	placeholderDropped uint64
 }
 
 // Suppressor decides whether a finding should be suppressed (not emitted) on the
@@ -80,6 +85,13 @@ func (e *Engine) WithSuppressor(s Suppressor) *Engine {
 // suppressor. Used for the findings_suppressed_total metric.
 func (e *Engine) SuppressedCount() uint64 {
 	return atomic.LoadUint64(&e.suppressed)
+}
+
+// PlaceholderDroppedCount returns the cumulative number of candidate matches
+// dropped by the global placeholder/dummy-value filter. Used for the
+// placeholders_dropped_total metric.
+func (e *Engine) PlaceholderDroppedCount() uint64 {
+	return atomic.LoadUint64(&e.placeholderDropped)
 }
 
 // ReloadRules atomically replaces the engine's active rule set. It is safe to
@@ -161,6 +173,20 @@ func (e *Engine) Scan(ctx context.Context, content fetch.FileContent) (int, erro
 					if measured < rule.Entropy {
 						continue
 					}
+				}
+
+				// Global placeholder/dummy-value filter: drop matches that carry
+				// an unmistakable documentation-sample, mask, or "fill this in"
+				// signature (e.g. "...EXAMPLE", "your_api_key", "ghp_000...000").
+				// These recur across every credential type and are the dominant
+				// false-positive class at firehose scale, so they are filtered
+				// centrally rather than rule-by-rule. The check is conservative —
+				// it never suppresses a plausibly-real key — and operates only on
+				// the in-memory candidate value (nothing raw is emitted). A rule
+				// can opt out with the "no-placeholder-filter" tag.
+				if !ruleSkipsPlaceholderFilter(rule.Tags) && isPlaceholder(secretVal) {
+					atomic.AddUint64(&e.placeholderDropped, 1)
+					continue
 				}
 
 				confidence := computeConfidence(rule, secretVal, content.FileRef.Path)

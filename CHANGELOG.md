@@ -6,6 +6,45 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Global placeholder / dummy-value filter** (scan engine)
+- New always-on false-positive filter in the scan engine that drops matches
+  carrying an unmistakable placeholder signature — discharging the v0.2 ROADMAP
+  item "False-positive tuning: test-key patterns, known-dummy values". Per-rule
+  `allowlist` stopwords let a rule author silence anticipated false positives,
+  but documentation samples, tutorial stand-ins, and manual masks
+  (`AKIAIOSFODNN7EXAMPLE`, `your_api_key`, `ghp_000…000`,
+  `AKIAAAAAAAAAAAAAAAAA`) recur across *every* credential type and are
+  impractical to enumerate rule-by-rule, so they are now filtered centrally.
+- A candidate value is dropped if it contains a known placeholder word
+  (case-insensitive substring — `example`, `placeholder`, `changeme`,
+  `your_key`/`your_api_key`, `insert_key`, `dummy_key`, `redacted`, `lorem`, …),
+  a run of the same character repeated 8+ times (a manual mask), or a textbook
+  sequential-hex/full-alphabet fill. The filter runs after the entropy gate and
+  before emission.
+- **Conservative by design:** precision is weighted far above recall — a
+  suppressed real leak is the catastrophic outcome, a surviving dummy is merely
+  noise the entropy gate and confidence score already temper — so a randomly
+  generated credential never carries these signatures and is never dropped.
+- Operates only on the in-memory candidate value; nothing raw is logged,
+  persisted, or emitted (the never-store-raw invariant is untouched — a dropped
+  placeholder emits *nothing* to any sink). Each drop is counted in the new
+  `placeholders_dropped_total` stderr metric.
+- Per-rule opt-out via the `no-placeholder-filter` tag for the rare rule that
+  legitimately matches placeholder-shaped values.
+- Purely additive and self-contained in `internal/scan` — no new dependencies,
+  no architecture change, no flag (always on). With it active, the shipped
+  default ruleset's now-redundant `EXAMPLE`/`placeholder`/`xxxx` stopwords still
+  function unchanged.
+- Tests: `internal/scan/placeholder_test.go` (token/mono-run/sequential
+  detection, the conservative real-key-passes invariant, the mono-run threshold
+  boundary, and the opt-out tag) plus engine-level tests in `engine_test.go`
+  (EXAMPLE key dropped + counted, mono-run mask dropped, real key passes
+  uncounted, opt-out tag bypasses the filter, and no-sink-output on drop). Engine
+  and integration test fixtures that previously used the AWS documented sample
+  key `AKIAIOSFODNN7EXAMPLE` as a stand-in for a *real* key were updated to a
+  realistic non-placeholder key, since that value is now correctly recognised as
+  a placeholder.
+
 **Ruleset pre-flight validator (`seance rules validate`)** (cmd + ruleset)
 - New `rules validate` cobra subcommand and a reusable `ruleset.Validate`
   function that surface the ruleset defects the scan engine *silently tolerates*
