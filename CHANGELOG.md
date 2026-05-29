@@ -6,6 +6,30 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Per-rule confidence override (`confidence`)** (scan engine, ruleset)
+- New optional `confidence` field on a rule (gitleaks-format TOML) sets that
+  rule's **base** confidence score, overriding the engine default of `0.80`. A
+  rule author can now make a structurally-unambiguous prefix rule score higher,
+  or a wide-net generic rule score lower, **without touching engine code** — the
+  per-rule complement to the engine-wide `--min-confidence` floor.
+- The override is the *starting* score: the engine's high-specificity bonus,
+  entropy-headroom bonus, and the generic-on-non-suspicious-path penalty still
+  apply on top, and the final score is clamped to `[0.0, 1.0]`. Omitting the field
+  (or setting it to `0`) leaves the rule on the default base — byte-for-byte the
+  prior behavior.
+- It composes with `--min-confidence`: re-basing a rule low enough pushes its
+  findings under the global floor, so one TOML edit can quiet a noisy rule across
+  **every** sink at once.
+- **Fail-safe**, like allowlists: a value outside `[0.0, 1.0]` is ignored at
+  runtime (the rule falls back to the default base, so a typo never silently
+  disables detection) and `seance rules validate` flags it as a warning at edit
+  time so the author learns the override is doing nothing.
+- Tests: `internal/scan/ruleconfidence_test.go` (default-unchanged, override
+  raises/lowers the base, clamp-at-1.0 with the specificity bonus, out-of-range
+  falls back to the default, and composition with the `--min-confidence` floor)
+  and `internal/scan/ruleset/validate_test.go` (out-of-range is a warning,
+  in-range and the default `0` are clean).
+
 **TOML configuration file (`--config`)** (cmd/seance, pkg/config)
 - New `--config <path>` flag loads séance's entire configuration from a single
   versioned TOML file instead of a 20-flag command line — the form an operator

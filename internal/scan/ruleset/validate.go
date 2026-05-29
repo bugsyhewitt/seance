@@ -79,6 +79,9 @@ func (p Problem) String() string {
 //     default ruleset always avoids)
 //   - warning: a non-empty entropy threshold that is implausibly high (>8.0, the
 //     maximum Shannon entropy per byte) — the rule can never emit a finding
+//   - warning: a confidence override outside [0.0, 1.0] — the engine ignores it
+//     and falls back to the default base, so the author's tuning silently does
+//     nothing
 func Validate(rs *Ruleset) []Problem {
 	var problems []Problem
 	seen := make(map[string]int) // rule id -> first index seen
@@ -176,6 +179,18 @@ func Validate(rs *Ruleset) []Problem {
 			problems = append(problems, Problem{
 				RuleID: ruleID, RuleIndex: i, Field: "entropy", Severity: SeverityWarning,
 				Message: fmt.Sprintf("entropy threshold %.2f exceeds the 8.0-bit per-byte maximum; no value can satisfy it, so the rule never fires", rule.Entropy),
+			})
+		}
+
+		// Out-of-range confidence override: confidence is a score in [0.0, 1.0].
+		// A value outside that range (a negative number, or >1.0) is ignored by
+		// the engine — it falls back to the default base — so the author's intended
+		// tuning silently does nothing. 0 is the documented "use the default" value
+		// and is not flagged. Negative values are the real mistake worth surfacing.
+		if rule.Confidence < 0 || rule.Confidence > 1.0 {
+			problems = append(problems, Problem{
+				RuleID: ruleID, RuleIndex: i, Field: "confidence", Severity: SeverityWarning,
+				Message: fmt.Sprintf("confidence %.2f is outside the [0.0, 1.0] range; the engine ignores it and uses the default base score, so this override has no effect", rule.Confidence),
 			})
 		}
 	}

@@ -298,14 +298,17 @@ func extractSecret(submatch []string, secretGroup int) string {
 // computeConfidence returns a confidence score in [0.0, 1.0] for a match.
 //
 // Scoring model:
-//   - baseConfidence (0.80) for any match that survives keyword + regex + allowlist
+//   - the rule's own Confidence (if set in (0.0, 1.0]), else baseConfidence
+//     (0.80), is the starting score — a per-rule dial a rule author sets in TOML
+//     to make a high-trust rule score higher or a noisy rule lower, no code change
 //   - +highSpecificityBonus (0.10) if the rule has high-specificity keywords
 //     (prefix-pattern rules like AKIA, ghp_, xoxb-)
 //   - +entropyConfidenceBonus (0–0.15) based on how far entropy exceeds the
 //     rule's minimum threshold (only if rule.Entropy > 0)
-//   - Capped at 1.0
+//   - −0.10 path penalty for a generic rule on a non-suspicious path
+//   - Clamped to [0.0, 1.0]
 func computeConfidence(rule ruleset.Rule, secretVal, filePath string) float64 {
-	score := baseConfidence
+	score := ruleBaseConfidence(rule)
 
 	// High-specificity bonus: rules with short, unique prefix keywords
 	// (length ≤ 6) are tightly constrained and rarely match false positives.
@@ -334,6 +337,19 @@ func computeConfidence(rule ruleset.Rule, secretVal, filePath string) float64 {
 		score = 0.0
 	}
 	return score
+}
+
+// ruleBaseConfidence returns the starting confidence for a rule: the rule's own
+// Confidence when it is a sane override in (0.0, 1.0], else the engine default
+// baseConfidence (0.80). A rule that declares confidence = 0 (the default) or an
+// out-of-range value falls back to the engine default, so a malformed override
+// never silently disables a rule — Validate flags the out-of-range case at edit
+// time, while the engine stays fail-safe at runtime.
+func ruleBaseConfidence(rule ruleset.Rule) float64 {
+	if rule.Confidence > 0 && rule.Confidence <= 1.0 {
+		return rule.Confidence
+	}
+	return baseConfidence
 }
 
 // isGenericRule returns true for rules tagged "generic" — these cast a wider
