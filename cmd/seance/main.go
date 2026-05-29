@@ -11,11 +11,18 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/bugsyhewitt/seance/pkg/config"
 )
 
 var cfg = config.Defaults()
+
+// configPath is the optional path to a TOML config file (--config). When set,
+// the file is loaded as the base configuration and any flag the operator passes
+// explicitly overrides the corresponding file value (precedence: defaults <
+// file < flags/env).
+var configPath string
 
 var rootCmd = &cobra.Command{
 	Use:   "seance",
@@ -24,11 +31,102 @@ var rootCmd = &cobra.Command{
 credentials (API keys, tokens, private keys, .env files).
 
 Findings are redacted: séance shows you where to look and what to rotate,
-not the full secret. It does not verify credentials — that is your call.`,
-	RunE: runScan,
+not the full secret. It does not verify credentials — that is your call.
+
+Configuration precedence (lowest to highest): built-in defaults, then a TOML
+file passed with --config, then explicitly-set flags and environment variables.
+A flag you pass always wins over the same field in the config file, so you can
+keep a stable file and override one value on the command line.`,
+	PersistentPreRunE: applyConfigFile,
+	RunE:              runScan,
+}
+
+// applyConfigFile implements the defaults < file < flags precedence. cobra has
+// already parsed the command line into cfg by the time PersistentPreRunE runs,
+// so cfg holds (defaults overlaid with explicitly-set flags). We load the file
+// as a fresh base, then re-apply only the flags the operator actually changed on
+// top of it — leaving file values in place for every flag left at its default.
+func applyConfigFile(cmd *cobra.Command, _ []string) error {
+	if configPath == "" {
+		return nil // no file: cfg already holds defaults+flags, nothing to merge
+	}
+
+	// Snapshot the post-parse cfg so we can recover explicitly-set flag values
+	// after we overwrite cfg with the file layer.
+	parsed := cfg
+
+	fileCfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+
+	changed := make(map[string]bool)
+	cmd.Flags().Visit(func(f *pflag.Flag) { changed[f.Name] = true })
+
+	cfg = mergeConfig(fileCfg, parsed, changed)
+	return nil
+}
+
+// mergeConfig applies séance's defaults < file < flags precedence. fileCfg is
+// the configuration loaded from --config (already overlaid on defaults); parsed
+// is the cfg cobra produced from defaults+flags; changed names the flags the
+// operator set explicitly. The result is fileCfg with every explicitly-set
+// flag's value copied over from parsed, so a flag always beats the file while
+// file values survive for flags left at their default.
+//
+// It is a pure function of its inputs (no globals, no I/O) so the precedence
+// rules can be tested directly.
+func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.Config {
+	out := fileCfg
+	for name := range changed {
+		switch name {
+		case "token":
+			out.GitHubToken = parsed.GitHubToken
+		case "signatures":
+			out.SignaturesPath = parsed.SignaturesPath
+		case "output":
+			out.OutputFormat = parsed.OutputFormat
+		case "output-file":
+			out.OutputPath = parsed.OutputPath
+		case "sarif-file":
+			out.SarifPath = parsed.SarifPath
+		case "state-dir":
+			out.StateDir = parsed.StateDir
+		case "poll-interval":
+			out.PollIntervalSec = parsed.PollIntervalSec
+		case "watch":
+			out.Watch = parsed.Watch
+		case "watch-since":
+			out.WatchSince = parsed.WatchSince
+		case "watch-until":
+			out.WatchUntil = parsed.WatchUntil
+		case "force-push":
+			out.ForcePush = parsed.ForcePush
+		case "suppress-file":
+			out.SuppressFile = parsed.SuppressFile
+		case "min-confidence":
+			out.MinConfidence = parsed.MinConfidence
+		case "webhook-url":
+			out.WebhookURL = parsed.WebhookURL
+		case "webhook-header":
+			out.WebhookHeaders = parsed.WebhookHeaders
+		case "webhook-min-confidence":
+			out.WebhookMinConfidence = parsed.WebhookMinConfidence
+		case "webhook-format":
+			out.WebhookFormat = parsed.WebhookFormat
+		case "tui":
+			out.TUI = parsed.TUI
+		case "webhook-listen":
+			out.WebhookListenAddr = parsed.WebhookListenAddr
+		case "webhook-listen-secret":
+			out.WebhookListenSecret = parsed.WebhookListenSecret
+		}
+	}
+	return out
 }
 
 func init() {
+	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "path to a TOML config file holding any of the flags below; built-in defaults are the base, the file overlays them, and any flag you also pass on the command line overrides the file (defaults < file < flags); empty means flags-only")
 	rootCmd.PersistentFlags().StringVar(&cfg.GitHubToken, "token", cfg.GitHubToken, "GitHub personal access token")
 	rootCmd.PersistentFlags().StringVar(&cfg.SignaturesPath, "signatures", cfg.SignaturesPath, "path to TOML signatures file")
 	rootCmd.PersistentFlags().StringVar(&cfg.OutputFormat, "output", cfg.OutputFormat, "output format: json")

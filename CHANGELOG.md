@@ -6,6 +6,34 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**TOML configuration file (`--config`)** (cmd/seance, pkg/config)
+- New `--config <path>` flag loads séance's entire configuration from a single
+  versioned TOML file instead of a 20-flag command line — the form an operator
+  actually wants for the run-forever monitor deployment under systemd/Docker.
+- Precedence is **defaults < file < flags/env**: built-in defaults are the base,
+  the file overlays them, and any flag the operator *also* passes overrides the
+  same field in the file. `GITHUB_TOKEN` still applies on top, so the token can
+  stay out of the file.
+- Every operator-facing `Config` field already carried a struct tag; this makes
+  that intent real. `config.Load` seeds `Defaults()`, decodes the file over it,
+  and returns the file layer. Omitted keys keep their default; an **unknown key**
+  is a hard error (a misspelled `webhook_ur` should be reported, not silently
+  disable the alert channel), and a missing or unparseable file fails the run
+  rather than quietly running on defaults.
+- The merge is a pure `mergeConfig` helper driven by cobra's set-flag list, so
+  the precedence rules are unit-testable in isolation; wiring lives in a
+  `PersistentPreRunE`.
+- No new dependency — the file is parsed with the same `BurntSushi/toml` library
+  séance already uses for signatures. With no `--config` the path is byte-for-byte
+  the prior flags-only behavior. The never-store-raw invariant is untouched: the
+  file holds only configuration and séance still emits only redacted findings.
+- Tests: `pkg/config/config_test.go` (overlay-on-defaults, empty-file-equals-
+  defaults, missing-file error, invalid-TOML error, unknown-key error, string-
+  slice/headers decode) and `cmd/seance/config_test.go` (flag-beats-file,
+  bool-flag override of a `true` file value, no-flags-keeps-file, an end-to-end
+  cobra parse proving file values survive while a CLI flag overrides, and a
+  missing-file run failing the command).
+
 **Global confidence floor (`--min-confidence`)** (scan engine)
 - New `--min-confidence` flag (`0.0`–`1.0`) sets a global confidence floor: any
   finding whose computed confidence score is below it is dropped before it reaches
