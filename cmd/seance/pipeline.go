@@ -23,6 +23,7 @@ import (
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	"github.com/bugsyhewitt/seance/internal/output/sarif"
+	syslogsink "github.com/bugsyhewitt/seance/internal/output/syslog"
 	outtext "github.com/bugsyhewitt/seance/internal/output/text"
 	"github.com/bugsyhewitt/seance/internal/output/tui"
 	"github.com/bugsyhewitt/seance/internal/output/webhook"
@@ -189,6 +190,59 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		sinks = append(sinks, webhookSink)
 		fmt.Fprintf(os.Stderr, "séance: webhook alerting enabled — POSTing findings (confidence >= %.2f, format=%s) to %s\n",
 			c.WebhookMinConfidence, format, c.WebhookURL)
+	}
+
+	// Optional syslog alerting sink. When --syslog-sink is set, séance ships
+	// each redacted Finding as a JSON message to the local syslog socket or a
+	// remote collector, in addition to the stdout NDJSON stream. Delivery is
+	// non-blocking and fail-open: a slow or dead collector never stalls or
+	// fails the scan. The validation up front catches operator typos
+	// (unknown facility/severity, mismatched network/addr) at startup instead
+	// of mid-run after the first finding tries to ship.
+	if c.SyslogSink {
+		// Pair check: explicit network requires explicit address (and vice
+		// versa). Local-socket mode is "both empty".
+		if (c.SyslogNetwork == "") != (c.SyslogAddr == "") {
+			return fmt.Errorf("syslog: --syslog-network and --syslog-addr must both be set (for a remote collector) or both empty (for the local syslog socket); got network=%q addr=%q", c.SyslogNetwork, c.SyslogAddr)
+		}
+		facility, ferr := syslogsink.ParseFacility(c.SyslogFacility)
+		if ferr != nil {
+			return fmt.Errorf("syslog: %w", ferr)
+		}
+		severity, serr := syslogsink.ParseSeverity(c.SyslogSeverity)
+		if serr != nil {
+			return fmt.Errorf("syslog: %w", serr)
+		}
+		if c.SyslogMinConfidence < 0 || c.SyslogMinConfidence > 1 {
+			return fmt.Errorf("syslog: --syslog-min-confidence must be between 0.0 and 1.0, got %.2f", c.SyslogMinConfidence)
+		}
+		syslogSinkInst, syserr := syslogsink.New(syslogsink.Config{
+			Network:       c.SyslogNetwork,
+			Addr:          c.SyslogAddr,
+			Tag:           c.SyslogTag,
+			Facility:      facility,
+			FixedSeverity: severity,
+			MinConfidence: c.SyslogMinConfidence,
+			ErrLog:        os.Stderr,
+		})
+		if syserr != nil {
+			return fmt.Errorf("syslog: %w", syserr)
+		}
+		sinks = append(sinks, syslogSinkInst)
+		dest := "local syslog socket"
+		if c.SyslogAddr != "" {
+			dest = fmt.Sprintf("%s://%s", c.SyslogNetwork, c.SyslogAddr)
+		}
+		sevDesc := "from confidence"
+		if c.SyslogSeverity != "" {
+			sevDesc = "fixed=" + c.SyslogSeverity
+		}
+		facilityDesc := c.SyslogFacility
+		if facilityDesc == "" {
+			facilityDesc = "user"
+		}
+		fmt.Fprintf(os.Stderr, "séance: syslog alerting enabled — shipping findings (confidence >= %.2f, facility=%s, severity=%s) to %s\n",
+			c.SyslogMinConfidence, facilityDesc, sevDesc, dest)
 	}
 	for _, s := range sinks {
 		defer s.Close()
