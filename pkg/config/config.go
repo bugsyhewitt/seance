@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -309,6 +310,38 @@ type Config struct {
 	SplunkHECHost          string  `toml:"splunk_hec_host" yaml:"splunk_hec_host"`
 	SplunkHECMinConfidence float64 `toml:"splunk_hec_min_confidence" yaml:"splunk_hec_min_confidence"`
 	SplunkHECInsecure      bool    `toml:"splunk_hec_insecure" yaml:"splunk_hec_insecure"`
+
+	// S3 alerting sink. When S3Bucket is non-empty, séance batches each
+	// redacted Finding into NDJSON objects and PUTs them to an S3 (or
+	// S3-compatible) bucket in addition to the stdout NDJSON stream — the
+	// data-lake-native path that Athena/Glue/EMR/OpenSearch can query
+	// directly without a forwarder, an agent, or a relay. Objects land
+	// under Hive-style partitions (prefix/YYYY/MM/DD/HH/seance-<ns>.ndjson)
+	// so partition pruning Just Works. Delivery is non-blocking and
+	// fail-open: a slow or dead bucket never stalls or fails the scan.
+	// S3Region defaults to "us-east-1"; S3Endpoint defaults to the public
+	// AWS endpoint for the region but can point at MinIO, LocalStack, Ceph
+	// RGW, or any S3-compatible API. S3ForcePathStyle is required for most
+	// S3-compatible servers. S3SessionToken propagates STS credentials.
+	// S3Prefix gives the bucket a per-deployment namespace. Batching is
+	// the cost-discipline core of the sink: S3BatchSize and S3BatchBytes
+	// cap a single object's findings/payload, S3FlushInterval caps how long
+	// a finding may sit buffered before being shipped. With S3Bucket empty
+	// the sink is absent entirely and the data path is byte-for-byte
+	// unchanged.
+	S3Bucket            string        `toml:"s3_bucket" yaml:"s3_bucket"`
+	S3Region            string        `toml:"s3_region" yaml:"s3_region"`
+	S3Prefix            string        `toml:"s3_prefix" yaml:"s3_prefix"`
+	S3AccessKeyID       string        `toml:"s3_access_key_id" yaml:"s3_access_key_id"`
+	S3SecretAccessKey   string        `toml:"s3_secret_access_key" yaml:"s3_secret_access_key"`
+	S3SessionToken      string        `toml:"s3_session_token" yaml:"s3_session_token"`
+	S3Endpoint          string        `toml:"s3_endpoint" yaml:"s3_endpoint"`
+	S3ForcePathStyle    bool          `toml:"s3_force_path_style" yaml:"s3_force_path_style"`
+	S3MinConfidence     float64       `toml:"s3_min_confidence" yaml:"s3_min_confidence"`
+	S3BatchSize         int           `toml:"s3_batch_size" yaml:"s3_batch_size"`
+	S3BatchBytes        int           `toml:"s3_batch_bytes" yaml:"s3_batch_bytes"`
+	S3FlushInterval     time.Duration `toml:"s3_flush_interval" yaml:"s3_flush_interval"`
+	S3Insecure          bool          `toml:"s3_insecure" yaml:"s3_insecure"`
 }
 
 // Defaults returns a Config with sensible defaults.
