@@ -965,6 +965,111 @@ channel exactly as it does on every other.
   periodic stderr metrics line so an operator can tell whether the channel is
   delivering, struggling, or saturated.
 
+### S3 alerting (`--s3-bucket`)
+
+SIEMs are one half of the security-telemetry world; the **data lake** is the
+other. Athena, Glue, EMR, OpenSearch, Snowflake (via external tables), Databricks,
+and every "log → S3 → query" pipeline knows how to ingest NDJSON sitting under
+Hive-style partitions. When `--s3-bucket` is set, séance batches each redacted
+Finding into NDJSON and PUTs the batch to S3 (or any S3-compatible API: MinIO,
+LocalStack, Ceph RGW, Backblaze B2 with S3 compatibility, etc.) in addition to
+the stdout NDJSON stream — no forwarder, no agent, no Firehose in the middle.
+
+```bash
+# Minimum: bucket + IAM credentials. Defaults to us-east-1, virtual-hosted
+# AWS URLs, 500 findings or 4 MiB per object, flushed at least every 60s.
+seance \
+  --s3-bucket my-security-lake \
+  --s3-access-key-id $AWS_ACCESS_KEY_ID \
+  --s3-secret-access-key $AWS_SECRET_ACCESS_KEY
+
+# Full: a per-deployment prefix, a non-us-east region, larger batches for
+# cheaper Athena scans, and only high-confidence findings.
+seance \
+  --s3-bucket my-security-lake \
+  --s3-region eu-west-2 \
+  --s3-prefix seance/prod \
+  --s3-access-key-id $AWS_ACCESS_KEY_ID \
+  --s3-secret-access-key $AWS_SECRET_ACCESS_KEY \
+  --s3-batch-size 2000 \
+  --s3-batch-bytes 16777216 \
+  --s3-flush-interval 5m \
+  --s3-min-confidence 0.85
+
+# MinIO / LocalStack / Ceph RGW: point at the local endpoint and force
+# path-style addressing (S3-compatible servers rarely support virtual-hosted).
+seance \
+  --s3-bucket seance-dev \
+  --s3-endpoint http://localhost:9000 \
+  --s3-force-path-style \
+  --s3-access-key-id minioadmin \
+  --s3-secret-access-key minioadmin \
+  --s3-insecure
+```
+
+| Flag | What it does |
+|------|--------------|
+| `--s3-bucket` | Destination S3 bucket. Empty (default) disables the sink. |
+| `--s3-region` | AWS region (e.g. `us-east-1`, `eu-west-2`). Required for SigV4 signing. Empty defaults to `us-east-1`. |
+| `--s3-prefix` | Object key prefix (e.g. `seance/prod`). A trailing slash is added if absent. Empty puts objects at the bucket root. |
+| `--s3-access-key-id` | AWS access key id. Required when `--s3-bucket` is set. The `SEANCE_S3_ACCESS_KEY_ID` environment variable is the Docker-friendly fallback. |
+| `--s3-secret-access-key` | AWS secret access key. Required when `--s3-bucket` is set. The `SEANCE_S3_SECRET_ACCESS_KEY` environment variable is the Docker-friendly fallback. |
+| `--s3-session-token` | Optional STS session token (sent as `X-Amz-Security-Token`). Empty for long-lived IAM-user credentials. The `SEANCE_S3_SESSION_TOKEN` environment variable is the Docker-friendly fallback. |
+| `--s3-endpoint` | Endpoint URL override (e.g. `https://minio.acme:9000`). Empty defaults to the public AWS endpoint for `--s3-region`. |
+| `--s3-force-path-style` | Use path-style URLs (`https://endpoint/bucket/key`) instead of virtual-hosted (`https://bucket.endpoint/key`). Required for most S3-compatible servers and bucket names containing dots. Default false. |
+| `--s3-min-confidence` | Per-sink confidence floor (0.0–1.0). Only findings at or above this score are shipped to S3. |
+| `--s3-batch-size` | Max findings per S3 object. Bigger batches mean fewer PUTs (lower cost) and fatter files Athena/Glue can scan more efficiently. Default 500. |
+| `--s3-batch-bytes` | Max NDJSON body size per S3 object in bytes. Reaching this caps the object before `--s3-batch-size` does. Default 4 MiB. |
+| `--s3-flush-interval` | Max wall-clock time a finding may sit in the buffer before being flushed (e.g. `60s`, `5m`). Bounds how stale the freshest object can be on a low-throughput run. Default 60s. |
+| `--s3-insecure` | Skip TLS verification on the endpoint. Common for MinIO/LocalStack with self-signed certs. Default false. |
+
+**Object layout.** Every PUT lands under a Hive-style partition the major data-lake
+query engines understand:
+
+```
+s3://<bucket>/<prefix>/YYYY/MM/DD/HH/seance-<unixnano>-<rand>.ndjson
+```
+
+Each object is **NDJSON** — one redacted `Finding` per line, identical to the
+stdout stream. The `.ndjson` extension lets Athena auto-detect the format; the
+date partitions enable partition pruning so a query for "yesterday's findings"
+reads four objects, not the whole bucket. There is no raw secret material in
+any object; the never-emit-raw-secrets invariant holds on this channel exactly
+as it does on every other.
+
+**Why batch?** S3 PUT is priced per request. One-PUT-per-finding would generate
+thousands of objects a day, explode cost, and produce a bucket that is awful to
+list and query. Athena and Glue both prefer a small number of fat files over a
+sea of single-event objects. So findings buffer in memory and flush as one
+NDJSON object whenever `--s3-batch-size`, `--s3-batch-bytes`, or
+`--s3-flush-interval` fires first — and once more on shutdown, so a short run
+still ships its findings. This mirrors the canonical pattern used by Firehose,
+Vector, and Fluent Bit's S3 sinks.
+
+**Properties.**
+
+- **Non-blocking.** Findings hand off to a bounded in-memory channel (4096
+  deep) drained by a single background flusher. A slow or unreachable bucket
+  never applies backpressure; overflow events are dropped and counted rather
+  than stalling the pipeline.
+- **Fail open.** A non-2xx response or transport error is logged to stderr and
+  the batch is dropped rather than retried indefinitely — a dead S3 endpoint
+  must never balloon séance's memory or take down the monitor.
+- **Flush on shutdown.** Whatever sits in the buffer when séance receives
+  SIGINT/SIGTERM (or hits `--output-limit`) is PUT before the process exits, so
+  a short run still lands its findings in the bucket.
+- **Zero AWS-SDK dependency.** SigV4 is implemented inline with the Go
+  standard library — the same five-dependency `go.mod` that powers the rest of
+  séance. The Docker image stays small.
+- **S3-compatible.** Tested URL builders for path-style (`--s3-force-path-style`)
+  and virtual-hosted addressing; combined with `--s3-endpoint` and
+  `--s3-insecure` séance writes to MinIO, LocalStack, Ceph RGW, and any other
+  service speaking the S3 API.
+- **Counters on the metrics line.** `s3_puts_total`, `s3_puts_failed_total`,
+  `s3_findings_shipped_total`, and `s3_findings_dropped_total` are emitted on
+  the periodic stderr metrics line so an operator can tell whether the channel
+  is delivering, struggling, or saturated.
+
 ### Inbound webhook receiver (`--webhook-listen`)
 
 For the lowest possible latency — and zero polling/rate-limit cost — séance can

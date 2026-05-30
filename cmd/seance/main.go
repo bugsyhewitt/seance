@@ -170,6 +170,32 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.SplunkHECMinConfidence = parsed.SplunkHECMinConfidence
 		case "splunk-hec-insecure":
 			out.SplunkHECInsecure = parsed.SplunkHECInsecure
+		case "s3-bucket":
+			out.S3Bucket = parsed.S3Bucket
+		case "s3-region":
+			out.S3Region = parsed.S3Region
+		case "s3-prefix":
+			out.S3Prefix = parsed.S3Prefix
+		case "s3-access-key-id":
+			out.S3AccessKeyID = parsed.S3AccessKeyID
+		case "s3-secret-access-key":
+			out.S3SecretAccessKey = parsed.S3SecretAccessKey
+		case "s3-session-token":
+			out.S3SessionToken = parsed.S3SessionToken
+		case "s3-endpoint":
+			out.S3Endpoint = parsed.S3Endpoint
+		case "s3-force-path-style":
+			out.S3ForcePathStyle = parsed.S3ForcePathStyle
+		case "s3-min-confidence":
+			out.S3MinConfidence = parsed.S3MinConfidence
+		case "s3-batch-size":
+			out.S3BatchSize = parsed.S3BatchSize
+		case "s3-batch-bytes":
+			out.S3BatchBytes = parsed.S3BatchBytes
+		case "s3-flush-interval":
+			out.S3FlushInterval = parsed.S3FlushInterval
+		case "s3-insecure":
+			out.S3Insecure = parsed.S3Insecure
 		}
 	}
 	return out
@@ -222,6 +248,19 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.SplunkHECHost, "splunk-hec-host", cfg.SplunkHECHost, "HEC envelope 'host' field; empty omits it and lets the HEC indexer pick (usually the sender's IP)")
 	rootCmd.PersistentFlags().Float64Var(&cfg.SplunkHECMinConfidence, "splunk-hec-min-confidence", cfg.SplunkHECMinConfidence, "only ship findings at or above this confidence to Splunk HEC (0.0-1.0); per-sink complement to --min-confidence; 0 ships everything")
 	rootCmd.PersistentFlags().BoolVar(&cfg.SplunkHECInsecure, "splunk-hec-insecure", cfg.SplunkHECInsecure, "skip TLS certificate verification on the HEC endpoint — enterprise HEC deployments routinely sit behind a self-signed or internal-CA certificate; default false (verify like any HTTPS client)")
+	rootCmd.PersistentFlags().StringVar(&cfg.S3Bucket, "s3-bucket", cfg.S3Bucket, "ship each redacted finding to an S3 (or S3-compatible) bucket as a batched NDJSON object in addition to stdout — the data-lake-native path that Athena/Glue/EMR/OpenSearch can query directly with no forwarder or relay; objects land under Hive-style prefix/YYYY/MM/DD/HH/ partitions so partition pruning Just Works; delivery is non-blocking and fail-open; pair with --s3-access-key-id and --s3-secret-access-key; empty disables the sink")
+	rootCmd.PersistentFlags().StringVar(&cfg.S3Region, "s3-region", cfg.S3Region, "AWS region for the S3 sink (e.g. 'us-east-1', 'eu-west-2'); required for SigV4 signing; empty defaults to 'us-east-1'")
+	rootCmd.PersistentFlags().StringVar(&cfg.S3Prefix, "s3-prefix", cfg.S3Prefix, "object key prefix for the S3 sink (e.g. 'seance/prod'); a trailing slash is added if absent; empty puts objects at the bucket root which works but is messy at scale")
+	rootCmd.PersistentFlags().StringVar(&cfg.S3AccessKeyID, "s3-access-key-id", cfg.S3AccessKeyID, "AWS access key id for the S3 sink; required when --s3-bucket is set; SEANCE_S3_ACCESS_KEY_ID env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().StringVar(&cfg.S3SecretAccessKey, "s3-secret-access-key", cfg.S3SecretAccessKey, "AWS secret access key for the S3 sink; required when --s3-bucket is set; SEANCE_S3_SECRET_ACCESS_KEY env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().StringVar(&cfg.S3SessionToken, "s3-session-token", cfg.S3SessionToken, "AWS STS session token for the S3 sink (sent as X-Amz-Security-Token); leave empty for long-lived IAM-user credentials; SEANCE_S3_SESSION_TOKEN env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().StringVar(&cfg.S3Endpoint, "s3-endpoint", cfg.S3Endpoint, "S3 endpoint URL override (e.g. 'https://minio.acme:9000' or 'http://localhost:4566'); empty defaults to the public AWS endpoint for --s3-region; set to point at MinIO, LocalStack, Ceph RGW, or any S3-compatible API")
+	rootCmd.PersistentFlags().BoolVar(&cfg.S3ForcePathStyle, "s3-force-path-style", cfg.S3ForcePathStyle, "use path-style addressing (https://endpoint/bucket/key) instead of virtual-hosted style (https://bucket.endpoint/key); required for most S3-compatible servers and bucket names containing dots; default false (virtual-hosted, like real AWS)")
+	rootCmd.PersistentFlags().Float64Var(&cfg.S3MinConfidence, "s3-min-confidence", cfg.S3MinConfidence, "only ship findings at or above this confidence to S3 (0.0-1.0); per-sink complement to --min-confidence; 0 ships everything")
+	rootCmd.PersistentFlags().IntVar(&cfg.S3BatchSize, "s3-batch-size", cfg.S3BatchSize, "max findings per S3 object; bigger batches mean fewer PUTs (lower cost) and fatter files Athena/Glue can scan more efficiently; 0 uses 500")
+	rootCmd.PersistentFlags().IntVar(&cfg.S3BatchBytes, "s3-batch-bytes", cfg.S3BatchBytes, "max NDJSON body size per S3 object in bytes; reaching this caps the object before --s3-batch-size does; 0 uses 4 MiB")
+	rootCmd.PersistentFlags().DurationVar(&cfg.S3FlushInterval, "s3-flush-interval", cfg.S3FlushInterval, "max wall-clock time a finding may sit in the S3 buffer before being flushed (e.g. '60s', '5m'); bounds how stale the freshest object can be on a low-throughput run; 0 uses 60s")
+	rootCmd.PersistentFlags().BoolVar(&cfg.S3Insecure, "s3-insecure", cfg.S3Insecure, "skip TLS certificate verification on the S3 endpoint — common for MinIO/LocalStack with self-signed certs; default false (verify like any HTTPS client)")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
@@ -233,6 +272,18 @@ func runScan(_ *cobra.Command, _ []string) error {
 	// can pass it as a secret without baking it into a config file or flag.
 	if cfg.SplunkHECToken == "" {
 		cfg.SplunkHECToken = os.Getenv("SEANCE_SPLUNK_HEC_TOKEN")
+	}
+	// Same Docker-friendly env fallbacks for the S3 sink — the standard way
+	// IAM credentials reach a containerized monitor without baking them into
+	// a config file.
+	if cfg.S3AccessKeyID == "" {
+		cfg.S3AccessKeyID = os.Getenv("SEANCE_S3_ACCESS_KEY_ID")
+	}
+	if cfg.S3SecretAccessKey == "" {
+		cfg.S3SecretAccessKey = os.Getenv("SEANCE_S3_SECRET_ACCESS_KEY")
+	}
+	if cfg.S3SessionToken == "" {
+		cfg.S3SessionToken = os.Getenv("SEANCE_S3_SESSION_TOKEN")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

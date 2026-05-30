@@ -22,6 +22,7 @@ import (
 	csvsink "github.com/bugsyhewitt/seance/internal/output/csv"
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
+	s3sink "github.com/bugsyhewitt/seance/internal/output/s3"
 	"github.com/bugsyhewitt/seance/internal/output/sarif"
 	"github.com/bugsyhewitt/seance/internal/output/splunkhec"
 	syslogsink "github.com/bugsyhewitt/seance/internal/output/syslog"
@@ -284,6 +285,47 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			c.SplunkHECMinConfidence, idxDesc, tlsDesc, c.SplunkHECURL)
 	}
 
+	// Optional S3 alerting sink. When --s3-bucket is set, séance batches each
+	// redacted Finding into NDJSON objects and PUTs them to an S3 (or
+	// S3-compatible) bucket in addition to stdout — the data-lake-native path
+	// that Athena/Glue/EMR/OpenSearch can query directly with no forwarder or
+	// relay. Construction-time validation (bucket + credentials required,
+	// min-confidence in range) catches operator typos at startup.
+	var s3Sink *s3sink.Sink
+	if c.S3Bucket != "" {
+		var s3err error
+		s3Sink, s3err = s3sink.New(s3sink.Config{
+			Bucket:             c.S3Bucket,
+			Region:             c.S3Region,
+			Prefix:             c.S3Prefix,
+			AccessKeyID:        c.S3AccessKeyID,
+			SecretAccessKey:    c.S3SecretAccessKey,
+			SessionToken:       c.S3SessionToken,
+			Endpoint:           c.S3Endpoint,
+			ForcePathStyle:     c.S3ForcePathStyle,
+			MinConfidence:      c.S3MinConfidence,
+			BatchSize:          c.S3BatchSize,
+			BatchBytes:         c.S3BatchBytes,
+			FlushInterval:      c.S3FlushInterval,
+			InsecureSkipVerify: c.S3Insecure,
+			ErrLog:             os.Stderr,
+		})
+		if s3err != nil {
+			return fmt.Errorf("s3: %w", s3err)
+		}
+		sinks = append(sinks, s3Sink)
+		regionDesc := c.S3Region
+		if regionDesc == "" {
+			regionDesc = "us-east-1"
+		}
+		prefixDesc := c.S3Prefix
+		if prefixDesc == "" {
+			prefixDesc = "<root>"
+		}
+		fmt.Fprintf(os.Stderr, "séance: s3 alerting enabled — shipping findings (confidence >= %.2f, region=%s, prefix=%s) to bucket %s\n",
+			c.S3MinConfidence, regionDesc, prefixDesc, c.S3Bucket)
+	}
+
 	for _, s := range sinks {
 		defer s.Close()
 	}
@@ -513,6 +555,11 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			splunkSent, splunkFailed, splunkDropped = splunkSink.Stats()
 		}
 
+		var s3Puts, s3Failed, s3Shipped, s3Dropped uint64
+		if s3Sink != nil {
+			s3Puts, s3Failed, s3Shipped, s3Dropped = s3Sink.Stats()
+		}
+
 		// Search-API provider counters (zero when --watch is not configured).
 		var searchReqs, searchResults, searchEmitted uint64
 		searchRL := int64(-1)
@@ -530,7 +577,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d splunk_hec_sent_total=%d splunk_hec_failed_total=%d splunk_hec_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d rate_limit_throttled_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d splunk_hec_sent_total=%d splunk_hec_failed_total=%d splunk_hec_dropped_total=%d s3_puts_total=%d s3_puts_failed_total=%d s3_findings_shipped_total=%d s3_findings_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d rate_limit_throttled_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -552,6 +599,10 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			splunkSent,
 			splunkFailed,
 			splunkDropped,
+			s3Puts,
+			s3Failed,
+			s3Shipped,
+			s3Dropped,
 			searchReqs,
 			searchResults,
 			searchEmitted,

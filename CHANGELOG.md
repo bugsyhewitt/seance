@@ -6,6 +6,55 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**S3 alerting sink (`--s3-bucket`)** (output/s3, config, cmd)
+- New `--s3-bucket` family of flags ships each redacted `Finding` to an S3 (or
+  S3-compatible) bucket as batched NDJSON objects in addition to the stdout
+  stream — the data-lake-native delivery path that Athena, Glue, EMR,
+  OpenSearch, Snowflake, and every "log → S3 → query" pipeline can ingest
+  directly with no forwarder, agent, Firehose, or relay in between. Complements
+  the SIEM-oriented Splunk HEC and syslog sinks: SIEMs get the real-time
+  alerting, S3 gets the long-tail analytics corpus.
+- Objects land under Hive-style `prefix/YYYY/MM/DD/HH/seance-<unixnano>.ndjson`
+  partitions so Athena/Glue partition pruning works out of the box — a query
+  for "yesterday's findings" reads four objects, not the entire bucket.
+- Batched delivery: a single object carries up to `--s3-batch-size` findings
+  (default 500) or `--s3-batch-bytes` of NDJSON (default 4 MiB), whichever
+  fires first, with `--s3-flush-interval` (default 60s) capping how long any
+  finding sits buffered. Batching is the cost-discipline core of the sink —
+  S3 PUT is priced per request, so one-PUT-per-finding would balloon cost and
+  produce a bucket awful to list or query.
+- `--s3-region`, `--s3-prefix`, `--s3-session-token`, `--s3-endpoint`,
+  `--s3-force-path-style`, and `--s3-insecure` cover the full deployment
+  matrix — real AWS, STS-vended role credentials, MinIO / LocalStack / Ceph
+  RGW (S3-compatible endpoints with self-signed certs), bucket names
+  containing dots that require path-style addressing, and per-deployment
+  prefixes for multi-tenant lakes.
+- `--s3-min-confidence` is the per-sink confidence floor (the complement to
+  engine-wide `--min-confidence`) so the lake only ingests high-confidence
+  material when noisy rule classes are kept on local sinks only.
+- `SEANCE_S3_ACCESS_KEY_ID`, `SEANCE_S3_SECRET_ACCESS_KEY`, and
+  `SEANCE_S3_SESSION_TOKEN` env vars are the Docker-friendly credential
+  fallbacks, mirroring the existing `GITHUB_TOKEN` and
+  `SEANCE_SPLUNK_HEC_TOKEN` pattern.
+- Delivery is non-blocking (single background flusher draining a bounded
+  4096-deep channel) and fail-open (non-2xx and transport errors are logged
+  and counted, the batch is dropped rather than retried indefinitely so a
+  dead bucket never balloons séance's memory). The buffer is flushed on
+  shutdown so a short run still lands its findings.
+- Implemented with **zero AWS-SDK dependency**: SigV4 is hand-rolled with the
+  Go standard library, keeping `go.mod` to the same minimal five-dependency
+  set (cobra/pflag/toml) that powers the rest of séance and keeping the
+  scratch-based Docker image small.
+- Counters on the periodic metrics line: `s3_puts_total`,
+  `s3_puts_failed_total`, `s3_findings_shipped_total`,
+  `s3_findings_dropped_total`.
+- Tests in `internal/output/s3` cover SigV4 header shape, NDJSON batching by
+  count, flush-on-close, the never-emit-raw-secrets invariant, min-confidence
+  gating, 5xx and dead-endpoint fail-open behaviour, buffer-overflow
+  non-blocking, Close idempotency, STS session-token propagation, and both
+  URL builders (virtual-hosted and path-style). README has a full S3 section
+  alongside the existing sink docs.
+
 **Splunk HEC alerting sink (`--splunk-hec-url`)** (output/splunkhec, config, cmd)
 - New `--splunk-hec-url` / `--splunk-hec-token` flag pair (and matching
   `splunk_hec_url` / `splunk_hec_token` config keys) ship each redacted
