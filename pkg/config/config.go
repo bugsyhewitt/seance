@@ -268,6 +268,23 @@ type Config struct {
 	// a secret is allowed (private-network / sidecar deployments) but séance logs
 	// a warning. Ignored when WebhookListenAddr is empty.
 	WebhookListenSecret string `toml:"webhook_listen_secret" yaml:"webhook_listen_secret"`
+
+	// Syslog alerting sink. When SyslogSink is true, séance ships each Finding
+	// (above SyslogMinConfidence) as a redacted JSON message to a syslog
+	// endpoint in addition to the stdout NDJSON stream. With SyslogNetwork and
+	// SyslogAddr both empty the sink dials the local syslog socket
+	// (/dev/log on Linux, /var/run/syslog on macOS); set both to point at a
+	// remote collector (e.g. SyslogNetwork="udp", SyslogAddr="logs.acme:514").
+	// Delivery is non-blocking: a slow or dead syslog channel never stalls or
+	// fails the scan. Unsupported on Windows/Plan 9 — séance refuses to start
+	// with --syslog-sink on those platforms rather than silently dropping output.
+	SyslogSink          bool    `toml:"syslog_sink" yaml:"syslog_sink"`
+	SyslogNetwork       string  `toml:"syslog_network" yaml:"syslog_network"`
+	SyslogAddr          string  `toml:"syslog_addr" yaml:"syslog_addr"`
+	SyslogTag           string  `toml:"syslog_tag" yaml:"syslog_tag"`
+	SyslogFacility      string  `toml:"syslog_facility" yaml:"syslog_facility"`
+	SyslogSeverity      string  `toml:"syslog_severity" yaml:"syslog_severity"`
+	SyslogMinConfidence float64 `toml:"syslog_min_confidence" yaml:"syslog_min_confidence"`
 }
 
 // Defaults returns a Config with sensible defaults.

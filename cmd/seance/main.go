@@ -140,6 +140,20 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.RateLimit = parsed.RateLimit
 		case "dedupe-window":
 			out.DedupeWindowDays = parsed.DedupeWindowDays
+		case "syslog-sink":
+			out.SyslogSink = parsed.SyslogSink
+		case "syslog-network":
+			out.SyslogNetwork = parsed.SyslogNetwork
+		case "syslog-addr":
+			out.SyslogAddr = parsed.SyslogAddr
+		case "syslog-tag":
+			out.SyslogTag = parsed.SyslogTag
+		case "syslog-facility":
+			out.SyslogFacility = parsed.SyslogFacility
+		case "syslog-severity":
+			out.SyslogSeverity = parsed.SyslogSeverity
+		case "syslog-min-confidence":
+			out.SyslogMinConfidence = parsed.SyslogMinConfidence
 		}
 	}
 	return out
@@ -177,6 +191,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.WebhookListenSecret, "webhook-listen-secret", cfg.WebhookListenSecret, "HMAC-SHA256 secret configured on the GitHub webhook 'Secret' field; when set, every delivery's X-Hub-Signature-256 is verified before the body is parsed; running without a secret is allowed but séance logs a warning")
 	rootCmd.PersistentFlags().IntVar(&cfg.DedupeWindowDays, "dedupe-window", cfg.DedupeWindowDays, "retention window in DAYS for the cross-run finding seen-set (re-leak suppression); 0 (default) inherits --seen-ttl-days, so commit dedup and finding dedup share one window — byte-for-byte the prior behaviour; a non-zero value tunes finding suppression independently of the commit-side bound (e.g. --dedupe-window 30 keeps a re-pushed secret quiet for a month even though commit dedup expires at the SeenTTL); a negative value is rejected at startup")
 	rootCmd.PersistentFlags().Float64Var(&cfg.RateLimit, "rate-limit", cfg.RateLimit, "cap the AGGREGATE outbound request rate (requests/second) across every séance HTTP surface — events poller, --watch Search-API provider, and diff fetcher — with a single shared token bucket; burst is capped at ceil(rate-limit); 0 (default) disables the cap entirely; useful when sharing a GitHub token, sitting behind a rate-limited proxy, or running in a tight budget; throttled requests are counted on the metrics line as rate_limit_throttled_total")
+	rootCmd.PersistentFlags().BoolVar(&cfg.SyslogSink, "syslog-sink", cfg.SyslogSink, "ship each redacted finding as a JSON message to a syslog endpoint in addition to stdout — the SIEM-friendly path into rsyslog/syslog-ng/journald/Splunk/ELK/Datadog with no relay; with --syslog-network and --syslog-addr both empty the local syslog socket is used, otherwise dial the given remote collector; delivery is non-blocking and fail-open; unsupported on Windows/Plan 9 (séance refuses to start with this flag on those platforms)")
+	rootCmd.PersistentFlags().StringVar(&cfg.SyslogNetwork, "syslog-network", cfg.SyslogNetwork, "transport for --syslog-sink: '' (local syslog socket, default), 'udp', 'tcp', 'unixgram', or 'unix'; empty means local — paired with --syslog-addr empty; non-empty requires --syslog-addr to also be set")
+	rootCmd.PersistentFlags().StringVar(&cfg.SyslogAddr, "syslog-addr", cfg.SyslogAddr, "address of a remote syslog collector (e.g. 'logs.example.com:514') or path to a unix-domain socket; empty (the default) uses the local syslog socket; paired with --syslog-network")
+	rootCmd.PersistentFlags().StringVar(&cfg.SyslogTag, "syslog-tag", cfg.SyslogTag, "syslog tag / program name (RFC3164 header field); empty uses 'seance'")
+	rootCmd.PersistentFlags().StringVar(&cfg.SyslogFacility, "syslog-facility", cfg.SyslogFacility, "syslog facility for every message: 'user' (default), 'daemon', 'auth', 'authpriv', or 'local0'..'local7' (case-insensitive); security teams typically route séance to a dedicated local channel so findings are easy to ship onward without crossing into other user-facility traffic")
+	rootCmd.PersistentFlags().StringVar(&cfg.SyslogSeverity, "syslog-severity", cfg.SyslogSeverity, "pin every message to this severity ('emerg','alert','crit','err','warning','notice','info','debug', case-insensitive); empty (default) derives severity from finding confidence (>=0.95 alert, >=0.85 crit, >=0.70 err, >=0.50 warning, >=0.30 notice, else info) so SIEM rules can fire on severity alone")
+	rootCmd.PersistentFlags().Float64Var(&cfg.SyslogMinConfidence, "syslog-min-confidence", cfg.SyslogMinConfidence, "only ship findings with confidence at or above this threshold to syslog (0.0-1.0); the per-sink complement to --min-confidence; 0 ships everything that reached the syslog sink")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {

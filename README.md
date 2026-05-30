@@ -815,6 +815,77 @@ two channels operators reach for most, with no relay required. Other targets
 default `json` body, or land later as additional formats — the output layer fans
 out to any number of sinks.
 
+### Syslog alerting (`--syslog-sink`)
+
+Webhooks reach Slack and Discord; **syslog** reaches the rest of the SIEM world.
+Every serious log aggregator — rsyslog, syslog-ng, journald, Splunk, ELK,
+Datadog, Sumo Logic, Graylog — speaks RFC3164/RFC5424 syslog natively, usually
+on UDP/TCP port 514 or a unix socket. `--syslog-sink` ships each redacted
+finding as a JSON message to that pipeline directly, with no relay process and
+no HTTP listener to operate.
+
+```bash
+# Local syslog — pick it up with journald, rsyslog, or whatever the host runs.
+seance --syslog-sink
+
+# A remote collector on a dedicated facility, severity derived from confidence.
+seance \
+  --syslog-sink \
+  --syslog-network udp \
+  --syslog-addr logs.example.com:514 \
+  --syslog-facility local3 \
+  --syslog-min-confidence 0.85
+```
+
+| Flag | Description |
+|------|-------------|
+| `--syslog-sink` | Enable the syslog sink. With `--syslog-network` and `--syslog-addr` both empty (the default) séance dials the local syslog socket (`/dev/log` on Linux, `/var/run/syslog` on macOS). Unsupported on Windows/Plan 9 — séance refuses to start with this flag on those platforms rather than silently dropping output. |
+| `--syslog-network` | Transport for a remote collector: `udp`, `tcp`, `unixgram`, or `unix`. Empty (default) means local socket; non-empty requires `--syslog-addr` to be set too. |
+| `--syslog-addr` | Address of the collector (e.g. `logs.example.com:514`) or path to a unix-domain socket. Empty uses the local socket; paired with `--syslog-network`. |
+| `--syslog-tag` | Syslog tag / program name (the RFC3164 header field). Defaults to `seance`. |
+| `--syslog-facility` | Facility for every message: `user` (default), `daemon`, `auth`, `authpriv`, or `local0`–`local7` (case-insensitive). Security teams typically route séance to a dedicated `localN` channel so findings are easy to forward onward without crossing other user-facility traffic. |
+| `--syslog-severity` | Pin every message to a fixed severity (`emerg`, `alert`, `crit`, `err`, `warning`, `notice`, `info`, `debug`, case-insensitive). Empty (default) derives severity from the finding's confidence so SIEM rules can fire on header severity alone — no JSON parsing required. |
+| `--syslog-min-confidence` | Per-sink confidence floor (0.0–1.0). Only findings at or above this score are shipped to syslog; complements `--min-confidence` (which applies to *all* sinks). |
+
+**Confidence → severity mapping.** With `--syslog-severity` unset, séance maps
+each finding's confidence score to a syslog severity so a SIEM rule keyed off
+header severity alone can fire on high-signal findings without parsing the JSON
+body. The mapping is fixed:
+
+| Confidence | Syslog severity |
+|------------|-----------------|
+| ≥ 0.95 | `alert` |
+| ≥ 0.85 | `crit` |
+| ≥ 0.70 | `err` |
+| ≥ 0.50 | `warning` |
+| ≥ 0.30 | `notice` |
+| < 0.30 | `info` |
+
+Set `--syslog-severity` to override and pin every message to the same level
+(e.g. `--syslog-severity warning` for a uniform-severity stream).
+
+Behavior and guarantees:
+
+- **Same body, fully redacted.** Each message body is exactly the NDJSON
+  `Finding` object the stdout sink emits. Because `Finding` has no raw field,
+  the never-emit-raw-secrets invariant holds for syslog for free — the same
+  redacted record reaches every sink.
+- **Lazy dial, transparent reconnect.** The syslog connection is opened on the
+  first finding (so a collector that is briefly down at startup does not delay
+  or fail the scan) and re-opened transparently after a transient write error
+  (so a momentarily-restarting collector does not silently swallow the rest of
+  the run).
+- **Non-blocking.** Findings are handed to a bounded in-memory queue drained
+  by a background worker. A slow or hung collector cannot apply backpressure
+  to the scanner; overflow findings are dropped and counted rather than
+  stalling the pipeline.
+- **Fail open.** Dial or write errors are logged to stderr and the run
+  continues — a dead syslog channel never takes down the monitor.
+- **Startup validation.** Unknown facility/severity names, an out-of-range
+  `--syslog-min-confidence`, and a half-specified network/address pair are
+  rejected at startup rather than silently producing the wrong behaviour
+  mid-run.
+
 ### Inbound webhook receiver (`--webhook-listen`)
 
 For the lowest possible latency — and zero polling/rate-limit cost — séance can
