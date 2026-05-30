@@ -98,6 +98,8 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.OutputLimit = parsed.OutputLimit
 		case "sarif-file":
 			out.SarifPath = parsed.SarifPath
+		case "csv-file":
+			out.CSVPath = parsed.CSVPath
 		case "state-dir":
 			out.StateDir = parsed.StateDir
 		case "poll-interval":
@@ -154,6 +156,7 @@ func init() {
 	rootCmd.PersistentFlags().Int64Var(&cfg.OutputMaxBytes, "output-max-bytes", cfg.OutputMaxBytes, "rotate the --output-file when it would exceed this many bytes: the active file is renamed to <file>.1 (older generations shift up, a few are kept) and a fresh file is opened, bounding total disk for a run-forever monitor; 0 (default) appends forever; ignored unless --output-file names a real file")
 	rootCmd.PersistentFlags().IntVar(&cfg.OutputLimit, "output-limit", cfg.OutputLimit, "stop the run after this many findings have been emitted across all sinks; in-flight scan completes and every sink is closed cleanly (SARIF written, webhook queue drained, state persisted) — the same exit path as SIGINT; 0 (default) imposes no cap; useful for CI gates, bounded research runs, and demos")
 	rootCmd.PersistentFlags().StringVar(&cfg.SarifPath, "sarif-file", cfg.SarifPath, "also write a SARIF 2.1.0 report of all findings to this file (ingestible by GitHub code scanning and other SARIF tools); written once on shutdown; empty disables it")
+	rootCmd.PersistentFlags().StringVar(&cfg.CSVPath, "csv-file", cfg.CSVPath, "also write a CSV export of all findings (one header row + one row per redacted Finding) to this file for spreadsheets, BI tools, and ticketing imports; written once on shutdown (a clean run still produces a valid header-only file); empty disables it")
 	rootCmd.PersistentFlags().StringVar(&cfg.StateDir, "state-dir", cfg.StateDir, "directory for persistent state")
 	rootCmd.PersistentFlags().IntVar(&cfg.PollIntervalSec, "poll-interval", cfg.PollIntervalSec, "poll interval in seconds")
 	rootCmd.PersistentFlags().StringArrayVar(&cfg.Watch, "watch", cfg.Watch, "keyword to monitor via the GitHub commit Search API for targeted/org-scoped coverage, e.g. --watch acme-corp (repeatable); runs alongside the global events stream, empty disables it")

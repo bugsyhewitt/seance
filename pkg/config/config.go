@@ -217,6 +217,21 @@ type Config struct {
 	// --tui, and the webhook sink unchanged.
 	SarifPath string `toml:"sarif_path" yaml:"sarif_path"`
 
+	// CSVPath is an optional path to which séance writes a CSV export of all
+	// findings observed during the run — one header row plus one row per
+	// redacted Finding. CSV is the lingua franca of spreadsheets, BI tools,
+	// and ticketing imports (Jira / ServiceNow / Excel), so the export
+	// discharges the "I want the findings as a table" request that NDJSON
+	// and SARIF do not serve. Like SARIF the CSV is a document (header +
+	// rows), not a stream, so it is buffered in memory and written once on
+	// shutdown — including for clean runs, which still produce a valid
+	// header-only document so a downstream pipeline can rely on the file
+	// existing with the documented schema. The body is built solely from
+	// redacted Findings, so the never-store-raw invariant holds. Empty
+	// disables the CSV sink; it composes alongside stdout, --output-file,
+	// --sarif-file, --tui, and the webhook sink unchanged.
+	CSVPath string `toml:"csv_path" yaml:"csv_path"`
+
 	// TUI enables the live terminal feed: a scrolling, confidence-colored wall of
 	// recent findings with running counters, in place of the raw NDJSON stream on
 	// stdout. It is purely a presentation change to the primary sink — coverage,

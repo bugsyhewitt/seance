@@ -318,6 +318,7 @@ output_path       = "/var/log/seance/findings.ndjson"
 output_max_bytes  = 26214400          # rotate at 25 MiB; 0 appends forever
 output_limit      = 0                 # stop after N findings; 0 = unlimited (default)
 sarif_path        = "/var/log/seance/findings.sarif"
+csv_path          = "/var/log/seance/findings.csv"  # spreadsheet/ticketing export written on shutdown
 
 # Real-time alerting
 webhook_url            = "https://hooks.example.com/seance"
@@ -677,6 +678,66 @@ Behavior and guarantees:
   so a crash mid-write never leaves a half-written document a SARIF consumer would
   reject. The parent directory is auto-created (`--sarif-file reports/scan.sarif`
   works without a prior `mkdir`).
+
+### CSV export (`--csv-file`)
+
+NDJSON and SARIF are ideal for `jq`, log stores, and security platforms — but
+the moment a triager wants to open the findings in a spreadsheet, share them
+with a non-security stakeholder, or bulk-import them into a ticketing system
+(Jira, ServiceNow, Excel, Google Sheets), CSV is the lingua franca. Pass
+`--csv-file` to *also* write a CSV export of every finding the run observed:
+
+```bash
+# Stream NDJSON to stdout as usual AND write a CSV table on shutdown.
+seance --csv-file findings.csv
+
+# Compose with every other sink at once: live feed, durable NDJSON, SARIF
+# for security platforms, AND a spreadsheet-ready CSV for the bug bounty
+# triage tracker.
+seance \
+  --tui \
+  --output-file findings.ndjson \
+  --sarif-file reports/scan.sarif \
+  --csv-file reports/scan.csv
+```
+
+| Flag | Description |
+|------|-------------|
+| `--csv-file` | Write a CSV export (one header row + one row per redacted Finding) to this file in addition to whatever else is configured. The parent directory is created if missing. Empty (default) disables the CSV sink. |
+
+The columns, in order, are: `timestamp, rule_id, rule_description, provider,
+repo_owner, repo_name, commit_sha, file_path, line_number, redacted,
+confidence, tags, fingerprint`. Header names match the NDJSON field names so
+the two outputs are trivially correlated. Tags are joined with `;` (a CSV
+cell cannot itself be a list); the timestamp is rendered as RFC 3339 UTC so
+every spreadsheet/SIEM importer parses it the same way.
+
+Behavior and guarantees:
+
+- **One document, written on shutdown.** Unlike the streaming NDJSON sinks,
+  CSV is a single header + body table, so it is buffered in memory and
+  written once when séance stops (Ctrl-C / SIGTERM / `--output-limit` cap
+  reached). A clean (zero-finding) run still writes a valid header-only file
+  so a downstream pipeline can rely on the file existing with the documented
+  schema.
+- **Same redacted body.** Every column is sourced from the already-redacted
+  `Finding` — because `Finding` has no raw field, the never-emit-raw-secrets
+  invariant holds for the CSV export for free. The `redacted` and
+  `fingerprint` columns are the privacy-preserving identifiers a triager
+  uses to copy a fingerprint into `--suppress-file` and to confirm which
+  key to rotate without revealing usable material.
+- **RFC 4180 compliant.** The encoding/csv writer handles quoting, embedded
+  commas/quotes/newlines, and CRLF line endings, so a rule description or
+  file path containing any of those characters round-trips through any
+  conforming CSV reader.
+- **Atomic write.** The file is written via a temp file and renamed into
+  place, so a crash mid-write never leaves a half-written CSV a spreadsheet
+  importer would silently truncate. The parent directory is auto-created
+  (`--csv-file reports/scan.csv` works without a prior `mkdir`).
+- **Composes with every other sink.** It fans out from the same scan engine
+  alongside stdout, `--output-file`, `--sarif-file`, `--tui`, and the
+  webhook — pick any combination. With `--csv-file` unset the CSV sink is
+  absent entirely and the existing data path is byte-for-byte unchanged.
 
 ### Webhook alerting
 

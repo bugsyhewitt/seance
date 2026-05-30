@@ -261,6 +261,29 @@ func TestMergeConfig_DedupeWindowFlagBeatsFile(t *testing.T) {
 	}
 }
 
+// TestMergeConfig_CSVFileFlagBeatsFile verifies --csv-file follows the
+// defaults < file < flags precedence: the explicit flag wins over the file
+// value, and the file value survives untouched when the flag is not set.
+func TestMergeConfig_CSVFileFlagBeatsFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.CSVPath = "/etc/seance/from-file.csv"
+
+	parsed := config.Defaults()
+	parsed.CSVPath = "/tmp/from-flag.csv"
+
+	// Flag set: it wins.
+	got := mergeConfig(fileCfg, parsed, map[string]bool{"csv-file": true})
+	if got.CSVPath != "/tmp/from-flag.csv" {
+		t.Errorf("CSVPath = %q, want /tmp/from-flag.csv (flag overrides file)", got.CSVPath)
+	}
+
+	// Flag not set: the file value survives.
+	got = mergeConfig(fileCfg, parsed, map[string]bool{})
+	if got.CSVPath != "/etc/seance/from-file.csv" {
+		t.Errorf("CSVPath = %q, want /etc/seance/from-file.csv (file value survives)", got.CSVPath)
+	}
+}
+
 func TestApplyConfigFile_MissingFileErrors(t *testing.T) {
 	origCfg, origPath := cfg, configPath
 	t.Cleanup(func() { cfg, configPath = origCfg, origPath })

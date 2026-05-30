@@ -227,3 +227,28 @@ func TestLoad_RateLimit(t *testing.T) {
 		t.Errorf("RateLimit (omitted) = %v, want 0", defGot.RateLimit)
 	}
 }
+
+// TestLoad_CSVPath verifies the csv_path TOML key decodes onto the CSVPath
+// field — the config-file half of the --csv-file flag, used by run-forever
+// monitors that prefer a stable file to a long command line.
+func TestLoad_CSVPath(t *testing.T) {
+	path := writeTemp(t, "csv.toml", `csv_path = "/var/log/seance/findings.csv"`)
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.CSVPath != "/var/log/seance/findings.csv" {
+		t.Errorf("CSVPath = %q, want the file value", got.CSVPath)
+	}
+
+	// An omitted key must keep the default (empty — CSV sink disabled).
+	defPath := writeTemp(t, "default-csv.toml", `# no csv_path set`)
+	defGot, err := Load(defPath)
+	if err != nil {
+		t.Fatalf("Load default: %v", err)
+	}
+	if defGot.CSVPath != "" {
+		t.Errorf("CSVPath (omitted) = %q, want empty (sink disabled)", defGot.CSVPath)
+	}
+}

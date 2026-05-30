@@ -19,6 +19,7 @@ import (
 	searchprovider "github.com/bugsyhewitt/seance/internal/ingestion/search"
 	webhookrecvprovider "github.com/bugsyhewitt/seance/internal/ingestion/webhookrecv"
 	"github.com/bugsyhewitt/seance/internal/output"
+	csvsink "github.com/bugsyhewitt/seance/internal/output/csv"
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	"github.com/bugsyhewitt/seance/internal/output/sarif"
@@ -151,6 +152,19 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		sarifSink := sarif.New(c.SarifPath, c.Version)
 		sinks = append(sinks, sarifSink)
 		fmt.Fprintf(os.Stderr, "séance: writing SARIF 2.1.0 report to %s on shutdown\n", c.SarifPath)
+	}
+
+	// Optional CSV export sink. When --csv-file is set, every finding is ALSO
+	// buffered (redacted) and written as a single CSV document on shutdown — the
+	// lingua franca of spreadsheets, BI tools, and ticketing imports. Like SARIF
+	// it produces one document on Close (ordered before the final state flush by
+	// the deferred-Close loop below), so a clean run still emits a valid
+	// header-only file. With --csv-file unset it is absent entirely and the
+	// existing data path is byte-for-byte unchanged.
+	if c.CSVPath != "" {
+		csvSink := csvsink.New(c.CSVPath)
+		sinks = append(sinks, csvSink)
+		fmt.Fprintf(os.Stderr, "séance: writing CSV export to %s on shutdown\n", c.CSVPath)
 	}
 
 	// Optional webhook alerting sink. Constructed only when a URL is configured.
