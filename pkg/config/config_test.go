@@ -177,6 +177,32 @@ func TestLoad_OutputLimit(t *testing.T) {
 	}
 }
 
+// TestLoad_DedupeWindow verifies the dedupe_window_days TOML key decodes onto
+// the DedupeWindowDays field — the config-file half of the --dedupe-window
+// flag for run-forever monitors that prefer a stable file to a long command
+// line.
+func TestLoad_DedupeWindow(t *testing.T) {
+	path := writeTemp(t, "dw.toml", `dedupe_window_days = 30`)
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.DedupeWindowDays != 30 {
+		t.Errorf("DedupeWindowDays = %d, want 30 (from file)", got.DedupeWindowDays)
+	}
+
+	// An omitted key must keep the default (0 — inherit SeenTTLDays).
+	defPath := writeTemp(t, "default-dw.toml", `# no dedupe_window_days set`)
+	defGot, err := Load(defPath)
+	if err != nil {
+		t.Fatalf("Load default: %v", err)
+	}
+	if defGot.DedupeWindowDays != 0 {
+		t.Errorf("DedupeWindowDays (omitted) = %d, want 0 (inherits seen_ttl_days)", defGot.DedupeWindowDays)
+	}
+}
+
 // TestLoad_RateLimit verifies the rate_limit TOML key decodes onto the
 // RateLimit field — the config-file half of the --rate-limit flag, used by
 // run-forever monitors that prefer a stable file to a long command line.

@@ -6,6 +6,45 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Tunable finding dedupe window (`--dedupe-window`)** (state, config, cmd)
+- New `--dedupe-window` flag (and `dedupe_window_days` config key) tunes, in
+  days, the retention window of the cross-run finding seen-set (the
+  privacy-preserving fingerprint map that suppresses re-leaks — the same secret
+  re-pushed, forked, or matched by two overlapping rules alerts once, not every
+  time it reappears). It is the finding-side complement to `--seen-ttl-days`,
+  which governs the per-commit dedup map.
+- The two windows were previously coupled — both maps shared a single TTL
+  derived from `SeenTTLDays`. That meant an operator who wanted to widen
+  re-leak suppression had to also keep stale commit SHAs around (wasting state
+  size), and an operator who wanted tighter commit dedup had to also accept
+  faster re-alerting of known re-leaks. They are now independent.
+- `0` (the default) inherits `--seen-ttl-days` — byte-for-byte the prior
+  behaviour. A non-zero value lets an operator widen finding suppression (e.g.
+  `--dedupe-window 30`, so a re-pushed secret stays quiet for a month even
+  though commit dedup still expires at 7 days) or tighten it (e.g.
+  `--dedupe-window 1`, so a legitimate rotation re-alerts quickly) without
+  affecting the commit-side bound. A negative value is rejected at startup as
+  a typo.
+- Implemented as a new `state.EvictWithWindows(commitTTL, findingTTL)` method
+  on the persisted seen-set; `state.Evict(ttl)` is preserved as a shim
+  (`EvictWithWindows(ttl, ttl)`) so every existing caller keeps working. The
+  shared eviction goroutine (every 5 minutes) and the final pre-shutdown
+  sweep both apply the split TTLs in a single pass.
+- Follows the `defaults < file < flags` precedence like every other config
+  field. The never-store-raw invariant is untouched — the seen-set holds only
+  redacted, privacy-preserving fingerprints.
+- Tests: `internal/state/state_test.go` adds independent-TTL eviction (stale
+  commits cleared under the 7d commit TTL while same-age findings survive
+  under a 30d finding TTL, and vice-versa), the backward-compat shim
+  (`Evict(ttl)` ≡ `EvictWithWindows(ttl, ttl)`), the non-positive-TTL
+  contract (a TTL ≤ 0 disables eviction for that map, the other map's
+  window is still honoured), and nil-map safety for zero-value State loaded
+  from older state files. `pkg/config/config_test.go` asserts TOML decoding
+  and the omitted-key default. `cmd/seance/config_test.go` asserts
+  flag-beats-file precedence and file-value-survives-when-flag-unset for
+  `--dedupe-window`. README documents the flag, an example, the config-file
+  key, and the State-section note on independent windows.
+
 **Global outbound rate-limit (`--rate-limit`)** (throttle, fetch, ingestion, config, cmd)
 - New `--rate-limit` flag (and `rate_limit` config key) caps the **aggregate**
   outbound request rate, in requests per second, across **every** séance HTTP

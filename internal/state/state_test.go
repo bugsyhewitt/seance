@@ -195,6 +195,116 @@ func TestState_Evict_TrimsSeenFindings(t *testing.T) {
 	}
 }
 
+// TestState_EvictWithWindows_IndependentTTLs proves the two seen-sets honour
+// their own retention windows: a stale commit is evicted under the commit TTL
+// while a finding of the same age survives under a wider finding TTL, and a
+// stale finding is evicted under the finding TTL while a fresh commit
+// (whatever the commit TTL) is untouched.
+func TestState_EvictWithWindows_IndependentTTLs(t *testing.T) {
+	s := state.New()
+
+	now := time.Now()
+	s.SeenCommits["commit-stale"] = now.Add(-9 * 24 * time.Hour)  // older than 7d commit TTL
+	s.SeenCommits["commit-fresh"] = now.Add(-1 * 24 * time.Hour)  // within both windows
+	s.SeenFindings["finding-aged"] = now.Add(-9 * 24 * time.Hour) // older than commit TTL, within 30d finding TTL
+	s.SeenFindings["finding-old"] = now.Add(-31 * 24 * time.Hour) // older than 30d finding TTL
+
+	s.EvictWithWindows(7*24*time.Hour, 30*24*time.Hour)
+
+	if s.Seen("commit-stale") {
+		t.Error("commit older than 7d commit TTL should be evicted")
+	}
+	if !s.Seen("commit-fresh") {
+		t.Error("commit within 7d commit TTL should survive")
+	}
+	if !s.SeenFinding("finding-aged") {
+		t.Error("finding older than commit TTL but within 30d finding TTL must SURVIVE — windows are independent")
+	}
+	if s.SeenFinding("finding-old") {
+		t.Error("finding older than 30d finding TTL should be evicted")
+	}
+}
+
+// TestState_EvictWithWindows_BackwardCompat proves that calling Evict(ttl) is
+// byte-for-byte equivalent to EvictWithWindows(ttl, ttl) — the shim every
+// existing caller relies on. Both maps are trimmed against the same window.
+func TestState_EvictWithWindows_BackwardCompat(t *testing.T) {
+	makeState := func() *state.State {
+		s := state.New()
+		now := time.Now()
+		s.SeenCommits["c-old"] = now.Add(-9 * 24 * time.Hour)
+		s.SeenCommits["c-new"] = now.Add(-1 * 24 * time.Hour)
+		s.SeenFindings["f-old"] = now.Add(-9 * 24 * time.Hour)
+		s.SeenFindings["f-new"] = now.Add(-1 * 24 * time.Hour)
+		return s
+	}
+
+	viaShim := makeState()
+	viaShim.Evict(7 * 24 * time.Hour)
+
+	viaSplit := makeState()
+	viaSplit.EvictWithWindows(7*24*time.Hour, 7*24*time.Hour)
+
+	if len(viaShim.SeenCommits) != len(viaSplit.SeenCommits) {
+		t.Errorf("SeenCommits len: shim=%d, split=%d — shim must equal EvictWithWindows(ttl, ttl)", len(viaShim.SeenCommits), len(viaSplit.SeenCommits))
+	}
+	if len(viaShim.SeenFindings) != len(viaSplit.SeenFindings) {
+		t.Errorf("SeenFindings len: shim=%d, split=%d — shim must equal EvictWithWindows(ttl, ttl)", len(viaShim.SeenFindings), len(viaSplit.SeenFindings))
+	}
+	for _, k := range []string{"c-old", "c-new"} {
+		if viaShim.Seen(k) != viaSplit.Seen(k) {
+			t.Errorf("commit %q: shim=%v, split=%v — must match", k, viaShim.Seen(k), viaSplit.Seen(k))
+		}
+	}
+	for _, k := range []string{"f-old", "f-new"} {
+		if viaShim.SeenFinding(k) != viaSplit.SeenFinding(k) {
+			t.Errorf("finding %q: shim=%v, split=%v — must match", k, viaShim.SeenFinding(k), viaSplit.SeenFinding(k))
+		}
+	}
+}
+
+// TestState_EvictWithWindows_NonPositiveDisablesMap verifies that a
+// non-positive TTL for a given map disables eviction for that map (no entries
+// are removed) while the other map's window is still honoured. This is the
+// contract documented on EvictWithWindows.
+func TestState_EvictWithWindows_NonPositiveDisablesMap(t *testing.T) {
+	s := state.New()
+	now := time.Now()
+	s.SeenCommits["c-ancient"] = now.Add(-365 * 24 * time.Hour)
+	s.SeenFindings["f-ancient"] = now.Add(-365 * 24 * time.Hour)
+
+	// Commit TTL=0 disables commit eviction; finding TTL=7d still trims findings.
+	s.EvictWithWindows(0, 7*24*time.Hour)
+
+	if !s.Seen("c-ancient") {
+		t.Error("commit must survive when commitTTL <= 0 (eviction disabled for that map)")
+	}
+	if s.SeenFinding("f-ancient") {
+		t.Error("finding must be evicted when findingTTL > 0 and entry is older")
+	}
+
+	// And the symmetric case.
+	s2 := state.New()
+	s2.SeenCommits["c-ancient"] = now.Add(-365 * 24 * time.Hour)
+	s2.SeenFindings["f-ancient"] = now.Add(-365 * 24 * time.Hour)
+	s2.EvictWithWindows(7*24*time.Hour, 0)
+	if s2.Seen("c-ancient") {
+		t.Error("commit must be evicted when commitTTL > 0 and entry is older")
+	}
+	if !s2.SeenFinding("f-ancient") {
+		t.Error("finding must survive when findingTTL <= 0 (eviction disabled for that map)")
+	}
+}
+
+// TestState_EvictWithWindows_NilMapsSafe ensures the loops are safe on nil maps
+// — protecting against zero-value State loaded from a state file that predates
+// the SeenFindings field.
+func TestState_EvictWithWindows_NilMapsSafe(t *testing.T) {
+	var s state.State // nil SeenCommits, nil SeenFindings
+	// Must not panic.
+	s.EvictWithWindows(time.Hour, time.Hour)
+}
+
 // TestState_SeenFindings_PersistAcrossRestart is the cross-run guarantee: a
 // fingerprint recorded in run 1 is still suppressed in run 2 after a save/load
 // cycle — the re-leak suppression the feature exists to provide.
