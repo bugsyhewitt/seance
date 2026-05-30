@@ -154,6 +154,22 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.SyslogSeverity = parsed.SyslogSeverity
 		case "syslog-min-confidence":
 			out.SyslogMinConfidence = parsed.SyslogMinConfidence
+		case "splunk-hec-url":
+			out.SplunkHECURL = parsed.SplunkHECURL
+		case "splunk-hec-token":
+			out.SplunkHECToken = parsed.SplunkHECToken
+		case "splunk-hec-index":
+			out.SplunkHECIndex = parsed.SplunkHECIndex
+		case "splunk-hec-source":
+			out.SplunkHECSource = parsed.SplunkHECSource
+		case "splunk-hec-sourcetype":
+			out.SplunkHECSourceType = parsed.SplunkHECSourceType
+		case "splunk-hec-host":
+			out.SplunkHECHost = parsed.SplunkHECHost
+		case "splunk-hec-min-confidence":
+			out.SplunkHECMinConfidence = parsed.SplunkHECMinConfidence
+		case "splunk-hec-insecure":
+			out.SplunkHECInsecure = parsed.SplunkHECInsecure
 		}
 	}
 	return out
@@ -198,12 +214,25 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.SyslogFacility, "syslog-facility", cfg.SyslogFacility, "syslog facility for every message: 'user' (default), 'daemon', 'auth', 'authpriv', or 'local0'..'local7' (case-insensitive); security teams typically route séance to a dedicated local channel so findings are easy to ship onward without crossing into other user-facility traffic")
 	rootCmd.PersistentFlags().StringVar(&cfg.SyslogSeverity, "syslog-severity", cfg.SyslogSeverity, "pin every message to this severity ('emerg','alert','crit','err','warning','notice','info','debug', case-insensitive); empty (default) derives severity from finding confidence (>=0.95 alert, >=0.85 crit, >=0.70 err, >=0.50 warning, >=0.30 notice, else info) so SIEM rules can fire on severity alone")
 	rootCmd.PersistentFlags().Float64Var(&cfg.SyslogMinConfidence, "syslog-min-confidence", cfg.SyslogMinConfidence, "only ship findings with confidence at or above this threshold to syslog (0.0-1.0); the per-sink complement to --min-confidence; 0 ships everything that reached the syslog sink")
+	rootCmd.PersistentFlags().StringVar(&cfg.SplunkHECURL, "splunk-hec-url", cfg.SplunkHECURL, "ship each redacted finding to a Splunk HTTP Event Collector endpoint (e.g. 'https://splunk.example.com:8088/services/collector/event') as a JSON HEC envelope in addition to stdout — the SIEM-native path into Splunk with no relay or forwarder needed; delivery is non-blocking and fail-open; pair with --splunk-hec-token; empty disables the sink")
+	rootCmd.PersistentFlags().StringVar(&cfg.SplunkHECToken, "splunk-hec-token", cfg.SplunkHECToken, "Splunk HEC token, sent as 'Authorization: Splunk <token>'; required when --splunk-hec-url is set; SEANCE_SPLUNK_HEC_TOKEN env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().StringVar(&cfg.SplunkHECIndex, "splunk-hec-index", cfg.SplunkHECIndex, "pin every HEC event to this Splunk index; empty (default) uses the HEC token's default index — set it when the token is shared across uses and the security team wants seance events routed to a dedicated index")
+	rootCmd.PersistentFlags().StringVar(&cfg.SplunkHECSource, "splunk-hec-source", cfg.SplunkHECSource, "HEC envelope 'source' field; empty uses 'seance'")
+	rootCmd.PersistentFlags().StringVar(&cfg.SplunkHECSourceType, "splunk-hec-sourcetype", cfg.SplunkHECSourceType, "HEC envelope 'sourcetype' field — the hook Splunk admins target with a props.conf entry for field extraction; empty uses 'seance:finding'")
+	rootCmd.PersistentFlags().StringVar(&cfg.SplunkHECHost, "splunk-hec-host", cfg.SplunkHECHost, "HEC envelope 'host' field; empty omits it and lets the HEC indexer pick (usually the sender's IP)")
+	rootCmd.PersistentFlags().Float64Var(&cfg.SplunkHECMinConfidence, "splunk-hec-min-confidence", cfg.SplunkHECMinConfidence, "only ship findings at or above this confidence to Splunk HEC (0.0-1.0); per-sink complement to --min-confidence; 0 ships everything")
+	rootCmd.PersistentFlags().BoolVar(&cfg.SplunkHECInsecure, "splunk-hec-insecure", cfg.SplunkHECInsecure, "skip TLS certificate verification on the HEC endpoint — enterprise HEC deployments routinely sit behind a self-signed or internal-CA certificate; default false (verify like any HTTPS client)")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
 	// --token takes precedence; GITHUB_TOKEN env var is the Docker-friendly fallback.
 	if cfg.GitHubToken == "" {
 		cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
+	}
+	// Same Docker-friendly env fallback for the Splunk HEC token so an operator
+	// can pass it as a secret without baking it into a config file or flag.
+	if cfg.SplunkHECToken == "" {
+		cfg.SplunkHECToken = os.Getenv("SEANCE_SPLUNK_HEC_TOKEN")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -285,6 +285,30 @@ type Config struct {
 	SyslogFacility      string  `toml:"syslog_facility" yaml:"syslog_facility"`
 	SyslogSeverity      string  `toml:"syslog_severity" yaml:"syslog_severity"`
 	SyslogMinConfidence float64 `toml:"syslog_min_confidence" yaml:"syslog_min_confidence"`
+
+	// Splunk HEC alerting sink. When SplunkHECURL is non-empty, séance ships
+	// each redacted Finding to a Splunk HTTP Event Collector endpoint as a
+	// JSON-wrapped HEC event in addition to the stdout NDJSON stream — the
+	// SIEM-native path into Splunk that doesn't require a relay, a forwarder,
+	// or a Splunk syslog input. Delivery is non-blocking and fail-open: a slow
+	// or dead HEC channel never stalls or fails the scan. URL is typically
+	// "https://splunk.example.com:8088/services/collector/event"; SplunkHECToken
+	// is the HEC token (sent as "Authorization: Splunk <token>"). Index,
+	// Source, SourceType, and Host map directly to the corresponding HEC
+	// envelope fields; empty Index uses the token's default index, empty
+	// Source/SourceType use "seance" / "seance:finding", empty Host omits the
+	// field and lets Splunk pick. SplunkHECInsecure disables TLS verification
+	// for the common enterprise case of a self-signed or internal-CA HEC
+	// endpoint. With SplunkHECURL empty the sink is absent entirely and the
+	// existing data path is byte-for-byte unchanged.
+	SplunkHECURL           string  `toml:"splunk_hec_url" yaml:"splunk_hec_url"`
+	SplunkHECToken         string  `toml:"splunk_hec_token" yaml:"splunk_hec_token"`
+	SplunkHECIndex         string  `toml:"splunk_hec_index" yaml:"splunk_hec_index"`
+	SplunkHECSource        string  `toml:"splunk_hec_source" yaml:"splunk_hec_source"`
+	SplunkHECSourceType    string  `toml:"splunk_hec_sourcetype" yaml:"splunk_hec_sourcetype"`
+	SplunkHECHost          string  `toml:"splunk_hec_host" yaml:"splunk_hec_host"`
+	SplunkHECMinConfidence float64 `toml:"splunk_hec_min_confidence" yaml:"splunk_hec_min_confidence"`
+	SplunkHECInsecure      bool    `toml:"splunk_hec_insecure" yaml:"splunk_hec_insecure"`
 }
 
 // Defaults returns a Config with sensible defaults.

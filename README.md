@@ -886,6 +886,85 @@ Behavior and guarantees:
   rejected at startup rather than silently producing the wrong behaviour
   mid-run.
 
+### Splunk HEC alerting (`--splunk-hec-url`)
+
+Syslog reaches one half of the SIEM world; **Splunk HTTP Event Collector** is
+how the Splunk-centric half wants to receive structured events. When
+`--splunk-hec-url` is set, séance ships each redacted Finding to a Splunk HEC
+endpoint as a JSON HEC envelope in addition to the stdout NDJSON stream — no
+syslog input, no Universal Forwarder, no relay. The body wraps the same
+redacted `Finding` the webhook sink ships, under HEC's `event` field, with
+`source`, `sourcetype`, `index`, and `host` set from flags so a Splunk admin
+can target it with a `props.conf` entry for field extraction out of the box.
+
+```bash
+# Minimum: URL + token. Hits the HEC endpoint as TLS by default; the token's
+# default index is used.
+seance \
+  --splunk-hec-url https://splunk.example.com:8088/services/collector/event \
+  --splunk-hec-token $SPLUNK_HEC_TOKEN
+
+# Full: pin to an index, override source/sourcetype, skip TLS verify for an
+# enterprise HEC behind a self-signed cert, and only ship high-confidence
+# findings to keep the Splunk index focused.
+seance \
+  --splunk-hec-url https://splunk.example.com:8088/services/collector/event \
+  --splunk-hec-token $SPLUNK_HEC_TOKEN \
+  --splunk-hec-index seance \
+  --splunk-hec-source seance-prod \
+  --splunk-hec-sourcetype seance:finding \
+  --splunk-hec-host alfred \
+  --splunk-hec-insecure \
+  --splunk-hec-min-confidence 0.85
+```
+
+| Flag | What it does |
+|------|--------------|
+| `--splunk-hec-url` | Full HEC endpoint, typically `https://<host>:8088/services/collector/event`. Empty (default) disables the sink. |
+| `--splunk-hec-token` | HEC token, sent as `Authorization: Splunk <token>`. Required when `--splunk-hec-url` is set. The `SEANCE_SPLUNK_HEC_TOKEN` environment variable is the Docker-friendly fallback. |
+| `--splunk-hec-index` | Pin every event to a specific Splunk index. Empty (default) uses the HEC token's default index. |
+| `--splunk-hec-source` | HEC envelope `source` field. Empty uses `seance`. |
+| `--splunk-hec-sourcetype` | HEC envelope `sourcetype` field. Empty uses `seance:finding`. |
+| `--splunk-hec-host` | HEC envelope `host` field. Empty omits it and lets the HEC indexer pick (usually the sender's IP). |
+| `--splunk-hec-min-confidence` | Per-sink confidence floor (0.0–1.0). Only findings at or above this score reach Splunk; complements `--min-confidence` (which applies to *all* sinks). |
+| `--splunk-hec-insecure` | Skip TLS certificate verification. Enterprise HEC deployments routinely sit behind a self-signed or internal-CA certificate; this lets séance ship without bundling a CA. Default false. |
+
+**HEC envelope shape.** Each POST body is a single JSON object:
+
+```json
+{
+  "time": 1700000000.0,
+  "host": "alfred",
+  "source": "seance-prod",
+  "sourcetype": "seance:finding",
+  "index": "seance",
+  "event": { "rule_id": "aws-access-key", "redacted": "AKIA…WXYZ", ... }
+}
+```
+
+`time` is epoch seconds (float, sub-second precision) taken from the Finding's
+own timestamp so events land at the moment of detection, not the moment of
+delivery. `event` is the full redacted `Finding` object — identical to what the
+webhook sink ships, identical to the NDJSON stream. There is no raw secret
+material in the body; the never-emit-raw-secrets invariant holds on this
+channel exactly as it does on every other.
+
+**Properties.**
+
+- **Non-blocking.** Findings hand off to a bounded in-memory queue (256 deep)
+  drained by a single background worker. A slow or unreachable HEC never
+  applies backpressure; overflow events are dropped and counted rather than
+  stalling the pipeline.
+- **Fail open.** A non-2xx response or transport error is logged to stderr and
+  the run continues — a dead Splunk channel never takes down the monitor.
+- **Startup validation.** Missing URL, missing token, or an out-of-range
+  `--splunk-hec-min-confidence` are rejected at startup rather than silently
+  producing the wrong behaviour mid-run.
+- **Counters on the metrics line.** `splunk_hec_sent_total`,
+  `splunk_hec_failed_total`, and `splunk_hec_dropped_total` are emitted on the
+  periodic stderr metrics line so an operator can tell whether the channel is
+  delivering, struggling, or saturated.
+
 ### Inbound webhook receiver (`--webhook-listen`)
 
 For the lowest possible latency — and zero polling/rate-limit cost — séance can

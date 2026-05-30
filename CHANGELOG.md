@@ -6,6 +6,37 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**Splunk HEC alerting sink (`--splunk-hec-url`)** (output/splunkhec, config, cmd)
+- New `--splunk-hec-url` / `--splunk-hec-token` flag pair (and matching
+  `splunk_hec_url` / `splunk_hec_token` config keys) ship each redacted
+  `Finding` to a Splunk HTTP Event Collector endpoint as a JSON HEC envelope
+  in addition to the stdout NDJSON stream. The dominant deployment is a
+  Splunk-centric SOC that already routes its other security telemetry into a
+  dedicated index — séance now lands in the same index, dashboard, and alert
+  rules with no Universal Forwarder, no relay, and no syslog input to babysit.
+- Companion flags `--splunk-hec-index`, `--splunk-hec-source`,
+  `--splunk-hec-sourcetype`, `--splunk-hec-host` map directly to the
+  corresponding HEC envelope fields so a Splunk admin can target the stream
+  with a `props.conf` field-extraction entry out of the box.
+- `--splunk-hec-min-confidence` is the per-sink confidence floor (the
+  complement to engine-wide `--min-confidence`) so the Splunk index only sees
+  high-confidence material when noisy classes are kept on local sinks only.
+- `--splunk-hec-insecure` disables TLS verification on the HEC connection for
+  the routine enterprise case of a self-signed or internal-CA HEC endpoint;
+  off by default. `SEANCE_SPLUNK_HEC_TOKEN` env var is the Docker-friendly
+  token fallback, mirroring the existing `GITHUB_TOKEN` pattern.
+- Delivery is non-blocking (single background worker draining a bounded
+  256-deep queue) and fail-open (non-2xx and transport errors are logged and
+  counted, never returned to the scanner) — a slow or dead HEC channel never
+  stalls the pipeline or takes down the monitor, matching the webhook and
+  syslog sinks. Counters `splunk_hec_sent_total`, `splunk_hec_failed_total`,
+  `splunk_hec_dropped_total` are emitted on the periodic metrics line.
+- The HEC `event` body is the already-redacted `Finding` (no raw field on the
+  type), so the never-emit-raw-secrets invariant holds for the HEC channel
+  exactly as it does for every other sink. With `--splunk-hec-url` unset the
+  sink is absent entirely and the existing data path is byte-for-byte
+  unchanged.
+
 **CSV export sink (`--csv-file`)** (output/csv, config, cmd)
 - New `--csv-file` flag (and `csv_path` config key) writes a CSV export of
   every finding the run observed — one header row plus one row per redacted

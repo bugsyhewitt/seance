@@ -284,6 +284,53 @@ func TestMergeConfig_CSVFileFlagBeatsFile(t *testing.T) {
 	}
 }
 
+// TestMergeConfig_SplunkHECFlagsBeatFile verifies --splunk-hec-* follow the
+// defaults < file < flags precedence: an explicit flag overrides the file, and
+// the file value survives when the flag is not set.
+func TestMergeConfig_SplunkHECFlagsBeatFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.SplunkHECURL = "https://hec-file.example.com:8088/services/collector/event"
+	fileCfg.SplunkHECToken = "file-token"
+	fileCfg.SplunkHECIndex = "file_index"
+	fileCfg.SplunkHECInsecure = false
+
+	parsed := config.Defaults()
+	parsed.SplunkHECURL = "https://hec-flag.example.com:8088/services/collector/event"
+	parsed.SplunkHECToken = "flag-token"
+	parsed.SplunkHECIndex = "flag_index"
+	parsed.SplunkHECInsecure = true
+
+	got := mergeConfig(fileCfg, parsed, map[string]bool{
+		"splunk-hec-url":      true,
+		"splunk-hec-token":    true,
+		"splunk-hec-index":    true,
+		"splunk-hec-insecure": true,
+	})
+	if got.SplunkHECURL != parsed.SplunkHECURL {
+		t.Errorf("SplunkHECURL = %q, want %q (flag overrides file)", got.SplunkHECURL, parsed.SplunkHECURL)
+	}
+	if got.SplunkHECToken != "flag-token" {
+		t.Errorf("SplunkHECToken = %q, want flag-token", got.SplunkHECToken)
+	}
+	if got.SplunkHECIndex != "flag_index" {
+		t.Errorf("SplunkHECIndex = %q, want flag_index", got.SplunkHECIndex)
+	}
+	if !got.SplunkHECInsecure {
+		t.Error("SplunkHECInsecure = false, want true (flag overrides file)")
+	}
+
+	got = mergeConfig(fileCfg, parsed, map[string]bool{})
+	if got.SplunkHECURL != fileCfg.SplunkHECURL {
+		t.Errorf("SplunkHECURL = %q, want %q (file value survives)", got.SplunkHECURL, fileCfg.SplunkHECURL)
+	}
+	if got.SplunkHECToken != "file-token" {
+		t.Errorf("SplunkHECToken = %q, want file-token (file value survives)", got.SplunkHECToken)
+	}
+	if got.SplunkHECInsecure {
+		t.Error("SplunkHECInsecure = true, want false (file value survives)")
+	}
+}
+
 func TestApplyConfigFile_MissingFileErrors(t *testing.T) {
 	origCfg, origPath := cfg, configPath
 	t.Cleanup(func() { cfg, configPath = origCfg, origPath })
