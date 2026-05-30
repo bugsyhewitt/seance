@@ -6,6 +6,55 @@ All notable changes to séance are documented here.
 
 ### Added
 
+**CSV export sink (`--csv-file`)** (output/csv, config, cmd)
+- New `--csv-file` flag (and `csv_path` config key) writes a CSV export of
+  every finding the run observed — one header row plus one row per redacted
+  `Finding` — for spreadsheets, BI tools, and ticketing imports (Jira,
+  ServiceNow, Excel, Google Sheets). NDJSON serves `jq`/log stores and SARIF
+  serves security platforms; CSV closes the gap for the moment a triager
+  wants a table to filter/sort/share with a non-security stakeholder.
+- Like SARIF, CSV is a *document* (header + body), not a stream: the new
+  `internal/output/csv` package implements `output.Sink` by buffering each
+  redacted `Finding` on `Emit` and serializing the complete document once
+  on `Close`. The body is built solely from already-redacted `Finding`s
+  (which have no raw field), so the never-store-raw invariant holds for the
+  CSV export for free — exactly the same argument that makes the SARIF
+  report safe.
+- Columns, in order: `timestamp, rule_id, rule_description, provider,
+  repo_owner, repo_name, commit_sha, file_path, line_number, redacted,
+  confidence, tags, fingerprint`. Header names match the NDJSON field names
+  so the two outputs are trivially correlated. Tags are joined with `;`
+  (a CSV cell cannot itself be a list); the timestamp is rendered as RFC
+  3339 UTC for tool-agnostic parsing; confidence is rendered with two
+  decimals to match the NDJSON/SARIF precision and avoid spreadsheet
+  importers showing scientific notation. The Go `encoding/csv` writer
+  handles RFC 4180 quoting of embedded commas/quotes/newlines, so a rule
+  description or file path containing any of those characters round-trips
+  through any conforming CSV reader.
+- A clean (zero-finding) run still writes a valid header-only file so a
+  downstream pipeline can rely on the file existing with the documented
+  schema. The write is atomic (temp file + rename) and the parent directory
+  is auto-created. `Close` is idempotent; an `Emit` racing after `Close` is
+  a silent no-op (matching the SARIF sink) so the pipeline's deferred-close
+  ordering is forgiving.
+- Wired in `cmd/seance/pipeline.go` behind `--csv-file` bound to a new
+  `config.CSVPath` field. The CSV sink fans out from the same scan engine
+  alongside stdout, `--output-file`, `--sarif-file`, `--tui`, and the
+  webhook — pick any combination. With `--csv-file` unset the CSV sink is
+  absent entirely and the existing data path is byte-for-byte unchanged.
+  No new dependencies (Go stdlib `encoding/csv`), no architecture change.
+- Tests: new `internal/output/csv/sink_test.go` (header + row round-trip,
+  empty-run header-only document, RFC-4180 quoting of commas/quotes/
+  newlines, idempotent `Close`, post-close `Emit` no-op, parent-dir
+  creation, atomic no-temp-leftover, no-raw-leak, insertion-order
+  preservation, concurrent-emit safety under `-race`, zero-timestamp
+  empty cell, and a compile-time `output.Sink` interface guard).
+  `pkg/config/config_test.go` adds a `csv_path` TOML decoding case (file
+  value + omitted-key default). `cmd/seance/config_test.go` asserts
+  flag-beats-file precedence for `--csv-file` (and file-value-survives-
+  when-flag-unset). README documents the flag, examples, the column set,
+  the guarantees, and the config-file key.
+
 **Tunable finding dedupe window (`--dedupe-window`)** (state, config, cmd)
 - New `--dedupe-window` flag (and `dedupe_window_days` config key) tunes, in
   days, the retention window of the cross-run finding seen-set (the
