@@ -238,6 +238,29 @@ func TestMergeConfig_RateLimitFlagBeatsFile(t *testing.T) {
 	}
 }
 
+// TestMergeConfig_DedupeWindowFlagBeatsFile verifies --dedupe-window follows
+// the defaults < file < flags precedence: the explicit flag wins over the
+// file value, and the file value survives untouched when the flag is not set.
+func TestMergeConfig_DedupeWindowFlagBeatsFile(t *testing.T) {
+	fileCfg := config.Defaults()
+	fileCfg.DedupeWindowDays = 14 // 14d finding window from the file
+
+	parsed := config.Defaults()
+	parsed.DedupeWindowDays = 30 // operator passed --dedupe-window 30
+
+	// Flag set: it wins.
+	got := mergeConfig(fileCfg, parsed, map[string]bool{"dedupe-window": true})
+	if got.DedupeWindowDays != 30 {
+		t.Errorf("DedupeWindowDays = %d, want 30 (flag overrides file)", got.DedupeWindowDays)
+	}
+
+	// Flag not set: the file value survives.
+	got = mergeConfig(fileCfg, parsed, map[string]bool{})
+	if got.DedupeWindowDays != 14 {
+		t.Errorf("DedupeWindowDays = %d, want 14 (file value survives)", got.DedupeWindowDays)
+	}
+}
+
 func TestApplyConfigFile_MissingFileErrors(t *testing.T) {
 	origCfg, origPath := cfg, configPath
 	t.Cleanup(func() { cfg, configPath = origCfg, origPath })

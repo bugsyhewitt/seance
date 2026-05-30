@@ -326,9 +326,10 @@ webhook_min_confidence = 0.85
 webhook_format         = "slack"
 
 # Cross-run dedup / suppression
-suppress_file = "/etc/seance/suppress.txt"
-state_dir     = "/var/lib/seance"
-seen_ttl_days = 7
+suppress_file        = "/etc/seance/suppress.txt"
+state_dir            = "/var/lib/seance"
+seen_ttl_days        = 7
+dedupe_window_days   = 0              # 0 = inherit seen_ttl_days; >0 tunes finding dedup independently
 
 # Global outbound throttle
 rate_limit    = 0                     # aggregate req/s cap across every HTTP surface; 0 = no cap
@@ -823,6 +824,14 @@ seance --suppress-file seance.ignore
 | Flag | Description |
 |------|-------------|
 | `--suppress-file` | Path to a newline-delimited list of finding fingerprints to always ignore. `#` comments and blank lines are skipped. Empty (default) means only known re-leaks are suppressed. |
+| `--dedupe-window N` | Retention window in days for the cross-run finding seen-set (re-leak suppression). `0` (default) inherits `--seen-ttl-days`, so commit dedup and finding dedup share one window — byte-for-byte the prior behaviour. A non-zero value tunes finding suppression **independently** of the commit-side bound: widen it to keep a re-pushed secret quiet longer than a commit SHA stays remembered (`--dedupe-window 30`), or tighten it to re-alert quickly after a legitimate rotation (`--dedupe-window 1`). A negative value is rejected at startup. |
+
+```bash
+# Keep commit dedup tight (7d default) but suppress re-leak fingerprints for a
+# month — a force-push-then-revert that re-surfaces the same secret stays quiet
+# even though the original commit SHA has long since aged out of seen-commits.
+seance --dedupe-window 30
+```
 
 The `findings_suppressed_total` metric counts how many findings were dropped by
 either layer, and `seen_findings_tracked` reports the current size of the
@@ -1218,7 +1227,11 @@ séance persists a small state file under `.seance/` (configurable with
   on-disk state file stay bounded for the life of the process. Reloaded on
   restart — no duplicate findings across restarts.
 - **Seen-finding set**: a map of finding fingerprints to first-seen time,
-  evicted on the same rolling TTL. This is what suppresses cross-run re-leaks
+  evicted on a configurable rolling TTL. By default it shares `seen_ttl_days`
+  with the seen-commit set, but `--dedupe-window` lets an operator tune the
+  finding-suppression window independently of the commit-side bound (e.g.
+  `--dedupe-window 30` keeps re-leaks suppressed for a month while commit
+  dedup still expires at 7 days). This is what suppresses cross-run re-leaks
   (see [Deduplication & suppression](#deduplication--suppression)). It stores
   only the privacy-preserving fingerprint, never raw secret material. Reloaded
   on restart so a re-pushed secret is not re-alerted across a restart.

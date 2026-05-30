@@ -139,6 +139,27 @@ type Config struct {
 	StateDir    string `toml:"state_dir" yaml:"state_dir"`
 	SeenTTLDays int    `toml:"seen_ttl_days" yaml:"seen_ttl_days"`
 
+	// DedupeWindowDays tunes the retention window, in days, of the cross-run
+	// finding seen-set (the privacy-preserving fingerprint map persisted in
+	// state.json that suppresses re-leaks — the same secret re-pushed, forked,
+	// or matched by two overlapping rules alerts once, not every time it
+	// reappears). It is the finding-side complement to SeenTTLDays, which
+	// governs the per-commit dedup map.
+	//
+	// 0 (the default) inherits SeenTTLDays — byte-for-byte the prior behaviour
+	// where both maps share a single retention window. A non-zero value lets
+	// an operator widen finding suppression (e.g. 30 days, so a re-pushed
+	// secret stays quiet for a month even though commit dedup expires at 7
+	// days) or tighten it (e.g. 1 day, so a legitimate rotation re-alerts
+	// quickly) without affecting the commit-side bound. A negative value is
+	// rejected at startup as a typo.
+	//
+	// The tighter window is in effect at all times: a fingerprint older than
+	// DedupeWindowDays is evicted on the next sweep and a re-occurrence will
+	// re-alert. The shared eviction goroutine (every 5 minutes) and the final
+	// pre-shutdown sweep both apply the split TTLs in a single pass.
+	DedupeWindowDays int `toml:"dedupe_window_days" yaml:"dedupe_window_days"`
+
 	// SuppressFile is an optional path to a newline-delimited list of finding
 	// fingerprints (the .gitleaksignore analogue). Any finding whose fingerprint
 	// appears in this file is never emitted or alerted — the operator's

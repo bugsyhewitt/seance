@@ -78,16 +78,29 @@ func runPipeline(ctx context.Context, c config.Config) error {
 	// seenTTL bounds the SeenCommits map so state size does not grow unbounded
 	// for the life of the process. Defaults to 7 days via config.SeenTTLDays.
 	seenTTL := time.Duration(c.SeenTTLDays) * 24 * time.Hour
+	// findingTTL bounds the SeenFindings (re-leak suppression) map. Validated up
+	// front so a negative --dedupe-window (a typo, not a sub-zero window) fails
+	// the run loudly. 0 inherits seenTTL — byte-for-byte the prior behaviour
+	// where commit dedup and finding dedup share one window.
+	if c.DedupeWindowDays < 0 {
+		return fmt.Errorf("dedupe-window must be >= 0, got %d", c.DedupeWindowDays)
+	}
+	findingTTL := seenTTL
+	if c.DedupeWindowDays > 0 {
+		findingTTL = time.Duration(c.DedupeWindowDays) * 24 * time.Hour
+		fmt.Fprintf(os.Stderr, "séance: finding dedupe window set to %d day(s) (commit dedup window remains %d day(s))\n", c.DedupeWindowDays, c.SeenTTLDays)
+	}
 
 	// stMu guards all access to st.SeenCommits, which is mutated by the main
 	// loop and read/trimmed by the metrics and eviction goroutines.
 	var stMu sync.Mutex
 
 	defer func() {
-		// Evict stale seen-commit entries before the final persist so the
-		// on-disk state file stays bounded across restarts.
+		// Evict stale entries before the final persist so the on-disk state
+		// file stays bounded across restarts. Commit and finding maps use
+		// independent retention windows (see --dedupe-window).
 		stMu.Lock()
-		st.Evict(seenTTL)
+		st.EvictWithWindows(seenTTL, findingTTL)
 		st.LastUpdated = time.Now()
 		stMu.Unlock()
 		_ = store.Save(st)
@@ -437,10 +450,11 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		)
 	}
 
-	// evict trims stale seen-commit entries under the state mutex.
+	// evict trims stale entries from both seen-sets under the state mutex,
+	// honouring the independent commit and finding retention windows.
 	evict := func() {
 		stMu.Lock()
-		st.Evict(seenTTL)
+		st.EvictWithWindows(seenTTL, findingTTL)
 		stMu.Unlock()
 	}
 

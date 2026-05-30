@@ -80,18 +80,41 @@ func (s *State) MarkFinding(fingerprint string) {
 }
 
 // Evict removes seen-commit and seen-finding entries older than ttl to bound
-// state size. Both dedup maps share the same retention window so the persisted
-// state file stays bounded across long-running deployments.
+// state size. It is a convenience shim over EvictWithWindows for callers that
+// want a single retention window covering both maps — byte-for-byte equivalent
+// to EvictWithWindows(ttl, ttl).
 func (s *State) Evict(ttl time.Duration) {
-	cutoff := time.Now().Add(-ttl)
-	for sha, t := range s.SeenCommits {
-		if t.Before(cutoff) {
-			delete(s.SeenCommits, sha)
+	s.EvictWithWindows(ttl, ttl)
+}
+
+// EvictWithWindows removes stale entries from both dedup maps using independent
+// retention windows: commitTTL bounds the seen-commit map (the per-commit dedup
+// that prevents re-scanning a SHA across restarts), and findingTTL bounds the
+// seen-finding map (the cross-run re-leak suppression on stable, redacted
+// fingerprints). Splitting the windows lets an operator tune the two layers
+// independently: keep commit dedup tight (a stale SHA after a few days is fine
+// to re-process — fresh content if anything) while keeping finding dedup wide
+// (suppress a known re-leak fingerprint for weeks so a panic-revert force-push
+// or a fork bot does not re-alert).
+//
+// A non-positive TTL for a given map disables eviction for that map (no entries
+// are removed). Both maps may safely be nil — the loops are no-ops.
+func (s *State) EvictWithWindows(commitTTL, findingTTL time.Duration) {
+	now := time.Now()
+	if commitTTL > 0 {
+		cutoff := now.Add(-commitTTL)
+		for sha, t := range s.SeenCommits {
+			if t.Before(cutoff) {
+				delete(s.SeenCommits, sha)
+			}
 		}
 	}
-	for fp, t := range s.SeenFindings {
-		if t.Before(cutoff) {
-			delete(s.SeenFindings, fp)
+	if findingTTL > 0 {
+		cutoff := now.Add(-findingTTL)
+		for fp, t := range s.SeenFindings {
+			if t.Before(cutoff) {
+				delete(s.SeenFindings, fp)
+			}
 		}
 	}
 }
