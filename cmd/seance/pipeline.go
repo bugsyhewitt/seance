@@ -23,6 +23,7 @@ import (
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	"github.com/bugsyhewitt/seance/internal/output/sarif"
+	"github.com/bugsyhewitt/seance/internal/output/splunkhec"
 	syslogsink "github.com/bugsyhewitt/seance/internal/output/syslog"
 	outtext "github.com/bugsyhewitt/seance/internal/output/text"
 	"github.com/bugsyhewitt/seance/internal/output/tui"
@@ -244,6 +245,45 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		fmt.Fprintf(os.Stderr, "séance: syslog alerting enabled — shipping findings (confidence >= %.2f, facility=%s, severity=%s) to %s\n",
 			c.SyslogMinConfidence, facilityDesc, sevDesc, dest)
 	}
+	// Optional Splunk HEC alerting sink. When --splunk-hec-url is set, séance
+	// ships each redacted Finding to a Splunk HTTP Event Collector endpoint as
+	// a JSON HEC envelope in addition to the stdout NDJSON stream — the
+	// SIEM-native path into Splunk that doesn't need a syslog input, a relay,
+	// or a forwarder. Delivery is non-blocking and fail-open: a slow or dead
+	// HEC channel never stalls or fails the scan. The construction-time
+	// validation (URL + token required, min-confidence in range) catches
+	// operator typos at startup rather than mid-run after the first finding
+	// tries to ship.
+	var splunkSink *splunkhec.Sink
+	if c.SplunkHECURL != "" {
+		var herr error
+		splunkSink, herr = splunkhec.New(splunkhec.Config{
+			URL:                c.SplunkHECURL,
+			Token:              c.SplunkHECToken,
+			Index:              c.SplunkHECIndex,
+			Source:             c.SplunkHECSource,
+			SourceType:         c.SplunkHECSourceType,
+			Host:               c.SplunkHECHost,
+			MinConfidence:      c.SplunkHECMinConfidence,
+			InsecureSkipVerify: c.SplunkHECInsecure,
+			ErrLog:             os.Stderr,
+		})
+		if herr != nil {
+			return fmt.Errorf("splunk-hec: %w", herr)
+		}
+		sinks = append(sinks, splunkSink)
+		tlsDesc := "verify-tls"
+		if c.SplunkHECInsecure {
+			tlsDesc = "INSECURE-skip-tls"
+		}
+		idxDesc := c.SplunkHECIndex
+		if idxDesc == "" {
+			idxDesc = "<token default>"
+		}
+		fmt.Fprintf(os.Stderr, "séance: splunk-hec alerting enabled — shipping findings (confidence >= %.2f, index=%s, %s) to %s\n",
+			c.SplunkHECMinConfidence, idxDesc, tlsDesc, c.SplunkHECURL)
+	}
+
 	for _, s := range sinks {
 		defer s.Close()
 	}
@@ -468,6 +508,11 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			alertsSent, alertsFailed, alertsDropped = webhookSink.Stats()
 		}
 
+		var splunkSent, splunkFailed, splunkDropped uint64
+		if splunkSink != nil {
+			splunkSent, splunkFailed, splunkDropped = splunkSink.Stats()
+		}
+
 		// Search-API provider counters (zero when --watch is not configured).
 		var searchReqs, searchResults, searchEmitted uint64
 		searchRL := int64(-1)
@@ -485,7 +530,7 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d rate_limit_throttled_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d splunk_hec_sent_total=%d splunk_hec_failed_total=%d splunk_hec_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d rate_limit_throttled_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -504,6 +549,9 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			alertsSent,
 			alertsFailed,
 			alertsDropped,
+			splunkSent,
+			splunkFailed,
+			splunkDropped,
 			searchReqs,
 			searchResults,
 			searchEmitted,
