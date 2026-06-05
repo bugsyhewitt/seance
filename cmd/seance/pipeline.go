@@ -21,6 +21,7 @@ import (
 	"github.com/bugsyhewitt/seance/internal/output"
 	csvsink "github.com/bugsyhewitt/seance/internal/output/csv"
 	essink "github.com/bugsyhewitt/seance/internal/output/elasticsearch"
+	kafkarest "github.com/bugsyhewitt/seance/internal/output/kafkarest"
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	s3sink "github.com/bugsyhewitt/seance/internal/output/s3"
@@ -362,6 +363,40 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			c.ElasticsearchMinConfidence, idxDesc, tlsDesc, c.ElasticsearchURL)
 	}
 
+	// Optional Kafka REST Proxy sink. When --kafka-rest-url is set, séance
+	// produces each redacted Finding to a Kafka topic via the Confluent REST
+	// Proxy v2 HTTP API (also compatible with Redpanda's HTTP Proxy) in
+	// addition to stdout — zero Kafka client dependencies, pure stdlib HTTP.
+	// Construction-time validation (URL + topic required, min-confidence in
+	// range) catches operator typos at startup rather than mid-run.
+	var kafkaRestSink *kafkarest.Sink
+	if c.KafkaRestURL != "" {
+		if c.KafkaRestTopic == "" {
+			return fmt.Errorf("kafka-rest: --kafka-rest-topic is required when --kafka-rest-url is set")
+		}
+		var krerr error
+		kafkaRestSink, krerr = kafkarest.New(kafkarest.Config{
+			URL:                c.KafkaRestURL,
+			Topic:              c.KafkaRestTopic,
+			APIKey:             c.KafkaRestAPIKey,
+			Username:           c.KafkaRestUsername,
+			Password:           c.KafkaRestPassword,
+			MinConfidence:      c.KafkaRestMinConfidence,
+			InsecureSkipVerify: c.KafkaRestInsecure,
+			ErrLog:             os.Stderr,
+		})
+		if krerr != nil {
+			return fmt.Errorf("kafka-rest: %w", krerr)
+		}
+		sinks = append(sinks, kafkaRestSink)
+		tlsDesc := "verify-tls"
+		if c.KafkaRestInsecure {
+			tlsDesc = "INSECURE-skip-tls"
+		}
+		fmt.Fprintf(os.Stderr, "séance: kafka-rest sink enabled — producing findings (confidence >= %.2f, topic=%s, %s) to %s\n",
+			c.KafkaRestMinConfidence, c.KafkaRestTopic, tlsDesc, c.KafkaRestURL)
+	}
+
 	for _, s := range sinks {
 		defer s.Close()
 	}
@@ -612,8 +647,14 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			rateLimitThrottled = atomic.LoadUint64(&rateLimiter.ThrottledRequests)
 		}
 
+		// Kafka REST Proxy sink counters (zero when --kafka-rest-url not set).
+		var kafkaSent, kafkaFailed, kafkaDropped uint64
+		if kafkaRestSink != nil {
+			kafkaSent, kafkaFailed, kafkaDropped = kafkaRestSink.Stats()
+		}
+
 		fmt.Fprintf(os.Stderr,
-			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d splunk_hec_sent_total=%d splunk_hec_failed_total=%d splunk_hec_dropped_total=%d s3_puts_total=%d s3_puts_failed_total=%d s3_findings_shipped_total=%d s3_findings_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d rate_limit_throttled_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
+			"séance metrics ts=%d push_events_total=%d force_pushes_total=%d prefilter_passed_total=%d prefilter_dropped_total=%d fetches_total=%d polls_total=%d findings_total=%d findings_suppressed_total=%d findings_below_confidence_total=%d findings_tag_filtered_total=%d findings_after_limit_total=%d placeholders_dropped_total=%d seen_commits_tracked=%d seen_findings_tracked=%d alerts_sent_total=%d alerts_failed_total=%d alerts_dropped_total=%d splunk_hec_sent_total=%d splunk_hec_failed_total=%d splunk_hec_dropped_total=%d s3_puts_total=%d s3_puts_failed_total=%d s3_findings_shipped_total=%d s3_findings_dropped_total=%d kafka_rest_sent_total=%d kafka_rest_failed_total=%d kafka_rest_dropped_total=%d search_requests_total=%d search_results_total=%d search_commits_total=%d search_rate_limit_remaining=%d rate_limit_throttled_total=%d push_events_hr=%.1f prefilter_survival_pct=%.1f fetches_hr=%.1f polls_hr=%.1f rate_limit_remaining=%d rate_limit_reset_in=%d\n",
 			time.Now().Unix(),
 			provPush,
 			provForcePush,
@@ -639,6 +680,9 @@ func runPipeline(ctx context.Context, c config.Config) error {
 			s3Failed,
 			s3Shipped,
 			s3Dropped,
+			kafkaSent,
+			kafkaFailed,
+			kafkaDropped,
 			searchReqs,
 			searchResults,
 			searchEmitted,

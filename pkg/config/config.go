@@ -363,6 +363,25 @@ type Config struct {
 	ElasticsearchPassword      string  `toml:"elasticsearch_password" yaml:"elasticsearch_password"`
 	ElasticsearchMinConfidence float64 `toml:"elasticsearch_min_confidence" yaml:"elasticsearch_min_confidence"`
 	ElasticsearchInsecure      bool    `toml:"elasticsearch_insecure" yaml:"elasticsearch_insecure"`
+
+	// Kafka REST Proxy sink. When KafkaRestURL is non-empty, séance produces
+	// each redacted Finding to a Kafka topic via the Confluent REST Proxy v2
+	// HTTP API (also compatible with Redpanda's HTTP Proxy). No Kafka client
+	// library is required — the REST Proxy translates the HTTP POST into a
+	// real Kafka produce call broker-side. KafkaRestTopic names the target
+	// topic. Authentication is via KafkaRestAPIKey (sent as
+	// "Authorization: Bearer <key>", takes precedence) or
+	// KafkaRestUsername + KafkaRestPassword (HTTP Basic).
+	// KafkaRestInsecure disables TLS verification for self-managed REST Proxy
+	// deployments with self-signed certs. With KafkaRestURL empty the sink is
+	// absent entirely and the data path is byte-for-byte unchanged.
+	KafkaRestURL           string  `toml:"kafka_rest_url" yaml:"kafka_rest_url"`
+	KafkaRestTopic         string  `toml:"kafka_rest_topic" yaml:"kafka_rest_topic"`
+	KafkaRestAPIKey        string  `toml:"kafka_rest_api_key" yaml:"kafka_rest_api_key"`
+	KafkaRestUsername      string  `toml:"kafka_rest_username" yaml:"kafka_rest_username"`
+	KafkaRestPassword      string  `toml:"kafka_rest_password" yaml:"kafka_rest_password"`
+	KafkaRestMinConfidence float64 `toml:"kafka_rest_min_confidence" yaml:"kafka_rest_min_confidence"`
+	KafkaRestInsecure      bool    `toml:"kafka_rest_insecure" yaml:"kafka_rest_insecure"`
 }
 
 // Defaults returns a Config with sensible defaults.
