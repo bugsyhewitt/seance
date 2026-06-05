@@ -202,3 +202,54 @@ correctness debt for almost nothing), and turns seance into a proper tee — liv
 feed for a human, durable NDJSON for tooling/SIEM — without touching the data
 path or the never-store-raw invariant (the file only ever holds redacted
 `Finding`s, exactly like every other sink).
+
+---
+
+## Item 9 — Elasticsearch / OpenSearch output sink (`--elasticsearch-url`)  ✅ IMPLEMENTED (R36)
+
+> Shipped: `--elasticsearch-url` wires a new `internal/output/elasticsearch` sink
+> that POSTs each redacted Finding to an Elasticsearch (or OpenSearch) cluster via
+> the REST Index API (`POST /<index>/_doc`), alongside the existing stdout NDJSON
+> stream. Index defaults to `seance-findings`; authentication via API key
+> (`--elasticsearch-api-key`, sent as `Authorization: ApiKey <key>`, takes
+> precedence) or HTTP Basic (`--elasticsearch-username` + `--elasticsearch-password`).
+> `--elasticsearch-insecure` disables TLS verification for self-managed clusters.
+> `--elasticsearch-min-confidence` is a per-sink confidence gate (complement to the
+> global `--min-confidence`). Docker-friendly env-var fallbacks:
+> `SEANCE_ELASTICSEARCH_API_KEY` and `SEANCE_ELASTICSEARCH_PASSWORD`. Same
+> non-blocking, fail-open, bounded-queue design as the Splunk HEC sink: a slow or
+> down cluster never stalls the scan. Config struct fields and TOML keys added; merge
+> logic wired. No new Go dependencies; no schema change to the Finding format; no
+> network calls in tests (httptest.Server). +14 tests in `internal/output/elasticsearch`.
+
+### What
+seance already fans findings into stdout NDJSON, file, webhook, Splunk HEC, syslog,
+CSV, S3, and TUI sinks. Elasticsearch / OpenSearch is the dominant open-source SIEM
+and log-aggregation backend — the native destination for any ELK or OpenSearch-centric
+SOC. Adding an Elasticsearch sink turns séance into a direct ELK feed with no
+Logstash relay, no Beats agent, and no custom pipeline.
+
+### How
+- New `internal/output/elasticsearch` sink implementing `output.Sink`: POST each
+  redacted `Finding` as a JSON document to `<url>/<index>/_doc` using the
+  Elasticsearch REST Index API. Auto-ID assignment (POST not PUT) so there are no
+  ID-collision considerations.
+- Bounded queue + single background worker, fail-open on non-2xx and transport
+  errors — the same design as `splunkhec`.
+- API key authentication (preferred) and HTTP Basic fallback. TLS-insecure option
+  for self-signed/internal-CA clusters. Per-sink confidence gate.
+- Config struct fields, TOML tags, flag registration, env-var fallback, merge logic,
+  and pipeline wiring all follow the `splunkhec` pattern exactly.
+
+### Effort estimate
+Small — ~1 day. No new dependencies; clean, familiar pattern; thin presentation
+layer over an already-proven queue design.
+
+### Rationale
+Elasticsearch is the highest-value remaining SIEM target in the output-sink lineage:
+Splunk HEC covers the Splunk-centric SOC; Elasticsearch/OpenSearch covers everyone
+else. The REST Index API is simpler than the S3 wire protocol (no SigV4, no
+multipart) and mirrors the Splunk HEC pattern almost exactly, so the incremental
+implementation effort is small. Completing the major SIEM sink set (Splunk + Elastic)
+means séance is a drop-in feed for essentially any enterprise security telemetry
+pipeline without a relay or agent.

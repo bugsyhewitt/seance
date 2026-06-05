@@ -342,6 +342,27 @@ type Config struct {
 	S3BatchBytes        int           `toml:"s3_batch_bytes" yaml:"s3_batch_bytes"`
 	S3FlushInterval     time.Duration `toml:"s3_flush_interval" yaml:"s3_flush_interval"`
 	S3Insecure          bool          `toml:"s3_insecure" yaml:"s3_insecure"`
+
+	// Elasticsearch alerting sink. When ElasticsearchURL is non-empty, séance
+	// indexes each redacted Finding into an Elasticsearch (or OpenSearch)
+	// cluster via the REST Index API (POST /<index>/_doc) in addition to the
+	// stdout NDJSON stream — the ELK/OpenSearch-native path that doesn't
+	// require a Logstash relay or a Beats agent. Delivery is non-blocking and
+	// fail-open: a slow or down cluster never stalls or fails the scan.
+	// ElasticsearchIndex defaults to "seance-findings". Authentication is via
+	// ElasticsearchApiKey (sent as "Authorization: ApiKey <key>", taking
+	// precedence) or ElasticsearchUsername + ElasticsearchPassword (HTTP
+	// Basic). ElasticsearchInsecure disables TLS verification for the common
+	// self-managed case of a self-signed or internal-CA certificate. With
+	// ElasticsearchURL empty the sink is absent entirely and the data path is
+	// byte-for-byte unchanged.
+	ElasticsearchURL           string  `toml:"elasticsearch_url" yaml:"elasticsearch_url"`
+	ElasticsearchIndex         string  `toml:"elasticsearch_index" yaml:"elasticsearch_index"`
+	ElasticsearchApiKey        string  `toml:"elasticsearch_api_key" yaml:"elasticsearch_api_key"`
+	ElasticsearchUsername      string  `toml:"elasticsearch_username" yaml:"elasticsearch_username"`
+	ElasticsearchPassword      string  `toml:"elasticsearch_password" yaml:"elasticsearch_password"`
+	ElasticsearchMinConfidence float64 `toml:"elasticsearch_min_confidence" yaml:"elasticsearch_min_confidence"`
+	ElasticsearchInsecure      bool    `toml:"elasticsearch_insecure" yaml:"elasticsearch_insecure"`
 }
 
 // Defaults returns a Config with sensible defaults.

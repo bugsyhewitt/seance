@@ -1070,6 +1070,55 @@ Vector, and Fluent Bit's S3 sinks.
   the periodic stderr metrics line so an operator can tell whether the channel
   is delivering, struggling, or saturated.
 
+### Elasticsearch / OpenSearch alerting (`--elasticsearch-url`)
+
+When `--elasticsearch-url` is set, séance indexes each redacted Finding into an
+Elasticsearch (or OpenSearch) cluster via the REST Index API (`POST /<index>/_doc`)
+in addition to the stdout NDJSON stream — the ELK/OpenSearch-native path that
+doesn't need Logstash, Beats, or any relay agent. Elasticsearch's dynamic mapping
+infers the field schema automatically on the first document, so no index template
+or mapping configuration is required before starting.
+
+```bash
+# Minimum: URL only, anonymous access (open cluster / proxy auth).
+seance --elasticsearch-url https://elastic.example.com:9200
+
+# API-key authentication (preferred for Elastic Cloud and modern clusters).
+seance \
+  --elasticsearch-url https://elastic.example.com:9200 \
+  --elasticsearch-api-key $SEANCE_ELASTICSEARCH_API_KEY \
+  --elasticsearch-index seance-findings \
+  --elasticsearch-min-confidence 0.85
+
+# HTTP Basic auth (legacy or self-managed clusters).
+seance \
+  --elasticsearch-url https://elastic.example.com:9200 \
+  --elasticsearch-username elastic \
+  --elasticsearch-password changeme \
+  --elasticsearch-insecure
+```
+
+| Flag | What it does |
+|------|--------------|
+| `--elasticsearch-url` | Base URL of the Elasticsearch / OpenSearch cluster (e.g. `https://elastic.example.com:9200`). Empty (default) disables the sink. |
+| `--elasticsearch-index` | Index to write documents into. Empty uses `seance-findings`. |
+| `--elasticsearch-api-key` | API key for authentication, sent as `Authorization: ApiKey <key>`. Takes precedence over username/password. The `SEANCE_ELASTICSEARCH_API_KEY` env var is the Docker-friendly fallback. |
+| `--elasticsearch-username` | Username for HTTP Basic auth. Ignored when `--elasticsearch-api-key` is set. |
+| `--elasticsearch-password` | Password for HTTP Basic auth. The `SEANCE_ELASTICSEARCH_PASSWORD` env var is the Docker-friendly fallback. |
+| `--elasticsearch-min-confidence` | Per-sink confidence floor (0.0–1.0). Only findings at or above this score are indexed; complements `--min-confidence`. |
+| `--elasticsearch-insecure` | Skip TLS certificate verification. Self-managed clusters routinely use self-signed or internal-CA certificates. Default false. |
+
+**Document shape.** Each POST body is the redacted `Finding` JSON directly — the
+same object the NDJSON stream and webhook sink ship. There is no raw secret
+material; the never-emit-raw-secrets invariant holds on this channel exactly as it
+does on every other.
+
+**Properties.** Same non-blocking, fail-open, bounded-queue design as the Splunk
+HEC sink: findings hand off to a 256-entry in-memory queue drained by a single
+background worker; a slow or unreachable cluster drops overflow events (counted) and
+logs errors to stderr rather than stalling the pipeline. Missing URL or an
+out-of-range `--elasticsearch-min-confidence` fail at startup, not mid-run.
+
 ### Inbound webhook receiver (`--webhook-listen`)
 
 For the lowest possible latency — and zero polling/rate-limit cost — séance can
