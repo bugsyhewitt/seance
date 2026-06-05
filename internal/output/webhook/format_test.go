@@ -27,6 +27,9 @@ func TestParseFormat(t *testing.T) {
 		{"Slack", FormatSlack, false},
 		{"discord", FormatDiscord, false},
 		{"DISCORD", FormatDiscord, false},
+		{"teams", FormatTeams, false},
+		{"  Teams  ", FormatTeams, false},
+		{"TEAMS", FormatTeams, false},
 		{"telegram", "", true},
 		{"xml", "", true},
 	}
@@ -117,6 +120,68 @@ func TestDiscordFormatBody(t *testing.T) {
 	}
 }
 
+// TestTeamsFormatBody verifies the Microsoft Teams MessageCard envelope: the
+// connector-card type/context keys Teams requires, the required summary, a
+// themeColor accent, and a text body carrying the redacted locator fields a
+// responder needs. A bare Slack "text" / Discord "content" top-level field must
+// not be present — Teams expects the card document, not those envelopes.
+func TestTeamsFormatBody(t *testing.T) {
+	body := captureBody(t, Config{Format: FormatTeams}, sampleFinding())
+
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("Teams body is not valid JSON: %v (%s)", err, body)
+	}
+	if got := env["@type"]; got != "MessageCard" {
+		t.Errorf("Teams body @type = %v, want \"MessageCard\": %s", got, body)
+	}
+	if got := env["@context"]; got != "https://schema.org/extensions" {
+		t.Errorf("Teams body @context = %v, want schema.org extensions: %s", got, body)
+	}
+	summary, ok := env["summary"].(string)
+	if !ok || summary == "" {
+		t.Fatalf("Teams body missing non-empty string \"summary\" (Teams drops cards without one): %s", body)
+	}
+	themeColor, ok := env["themeColor"].(string)
+	if !ok || themeColor == "" {
+		t.Fatalf("Teams body missing non-empty string \"themeColor\": %s", body)
+	}
+	if _, hasContent := env["content"]; hasContent {
+		t.Errorf("Teams body must not carry a Discord \"content\" field: %s", body)
+	}
+	text, ok := env["text"].(string)
+	if !ok {
+		t.Fatalf("Teams body missing string \"text\" field: %s", body)
+	}
+	for _, want := range []string{"AWS access key id", "octocat/hello-world", ".env", "AKIA********************WXYZ", "0.90"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Teams text missing %q\ngot: %s", want, text)
+		}
+	}
+}
+
+// TestConfidenceColor verifies the confidence-to-accent mapping used by the
+// Teams card: red at/above the high band, amber at/above the medium band, grey
+// below it, including the exact band boundaries.
+func TestConfidenceColor(t *testing.T) {
+	cases := []struct {
+		confidence float64
+		want       string
+	}{
+		{0.0, "6C757D"},
+		{0.49, "6C757D"},
+		{0.5, "E0A800"},
+		{0.84, "E0A800"},
+		{0.85, "D00000"},
+		{1.0, "D00000"},
+	}
+	for _, c := range cases {
+		if got := confidenceColor(c.confidence); got != c.want {
+			t.Errorf("confidenceColor(%.2f) = %q, want %q", c.confidence, got, c.want)
+		}
+	}
+}
+
 // TestJSONFormatBodyUnchanged confirms the default format still POSTs the raw
 // redacted Finding object — backward compatibility for existing endpoints.
 func TestJSONFormatBodyUnchanged(t *testing.T) {
@@ -137,7 +202,7 @@ func TestJSONFormatBodyUnchanged(t *testing.T) {
 // TestFormatsNeverLeakRawSecret asserts the never-emit-raw-secrets invariant
 // holds for every format: only the redacted mask appears, never raw material.
 func TestFormatsNeverLeakRawSecret(t *testing.T) {
-	for _, format := range []Format{FormatJSON, FormatSlack, FormatDiscord} {
+	for _, format := range []Format{FormatJSON, FormatSlack, FormatDiscord, FormatTeams} {
 		body := captureBody(t, Config{Format: format}, sampleFinding())
 		if bytes.Contains(body, []byte("AKIAIOSFODNN7EXAMPLE")) {
 			t.Errorf("format %q leaked raw secret into body: %s", format, body)
