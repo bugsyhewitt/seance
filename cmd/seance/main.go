@@ -196,6 +196,20 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.S3FlushInterval = parsed.S3FlushInterval
 		case "s3-insecure":
 			out.S3Insecure = parsed.S3Insecure
+		case "elasticsearch-url":
+			out.ElasticsearchURL = parsed.ElasticsearchURL
+		case "elasticsearch-index":
+			out.ElasticsearchIndex = parsed.ElasticsearchIndex
+		case "elasticsearch-api-key":
+			out.ElasticsearchApiKey = parsed.ElasticsearchApiKey
+		case "elasticsearch-username":
+			out.ElasticsearchUsername = parsed.ElasticsearchUsername
+		case "elasticsearch-password":
+			out.ElasticsearchPassword = parsed.ElasticsearchPassword
+		case "elasticsearch-min-confidence":
+			out.ElasticsearchMinConfidence = parsed.ElasticsearchMinConfidence
+		case "elasticsearch-insecure":
+			out.ElasticsearchInsecure = parsed.ElasticsearchInsecure
 		}
 	}
 	return out
@@ -261,6 +275,13 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&cfg.S3BatchBytes, "s3-batch-bytes", cfg.S3BatchBytes, "max NDJSON body size per S3 object in bytes; reaching this caps the object before --s3-batch-size does; 0 uses 4 MiB")
 	rootCmd.PersistentFlags().DurationVar(&cfg.S3FlushInterval, "s3-flush-interval", cfg.S3FlushInterval, "max wall-clock time a finding may sit in the S3 buffer before being flushed (e.g. '60s', '5m'); bounds how stale the freshest object can be on a low-throughput run; 0 uses 60s")
 	rootCmd.PersistentFlags().BoolVar(&cfg.S3Insecure, "s3-insecure", cfg.S3Insecure, "skip TLS certificate verification on the S3 endpoint — common for MinIO/LocalStack with self-signed certs; default false (verify like any HTTPS client)")
+	rootCmd.PersistentFlags().StringVar(&cfg.ElasticsearchURL, "elasticsearch-url", cfg.ElasticsearchURL, "index each redacted finding into an Elasticsearch (or OpenSearch) cluster via the REST Index API (POST /<index>/_doc) in addition to stdout — the ELK/OpenSearch-native path that doesn't need Logstash or a Beats agent; delivery is non-blocking and fail-open; e.g. 'https://elastic.example.com:9200'; empty disables the sink")
+	rootCmd.PersistentFlags().StringVar(&cfg.ElasticsearchIndex, "elasticsearch-index", cfg.ElasticsearchIndex, "Elasticsearch index to write documents into; empty uses 'seance-findings'; a static name or an ILM alias — date-suffix patterns are not expanded")
+	rootCmd.PersistentFlags().StringVar(&cfg.ElasticsearchApiKey, "elasticsearch-api-key", cfg.ElasticsearchApiKey, "Elasticsearch API key for authentication, sent as 'Authorization: ApiKey <key>'; takes precedence over --elasticsearch-username/--elasticsearch-password; SEANCE_ELASTICSEARCH_API_KEY env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().StringVar(&cfg.ElasticsearchUsername, "elasticsearch-username", cfg.ElasticsearchUsername, "username for Elasticsearch HTTP Basic auth; pair with --elasticsearch-password; ignored when --elasticsearch-api-key is set")
+	rootCmd.PersistentFlags().StringVar(&cfg.ElasticsearchPassword, "elasticsearch-password", cfg.ElasticsearchPassword, "password for Elasticsearch HTTP Basic auth; pair with --elasticsearch-username; SEANCE_ELASTICSEARCH_PASSWORD env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().Float64Var(&cfg.ElasticsearchMinConfidence, "elasticsearch-min-confidence", cfg.ElasticsearchMinConfidence, "only index findings at or above this confidence (0.0-1.0); per-sink complement to --min-confidence; 0 ships everything")
+	rootCmd.PersistentFlags().BoolVar(&cfg.ElasticsearchInsecure, "elasticsearch-insecure", cfg.ElasticsearchInsecure, "skip TLS certificate verification on the Elasticsearch endpoint — self-managed clusters routinely use self-signed or internal-CA certificates; default false (verify)")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
@@ -284,6 +305,13 @@ func runScan(_ *cobra.Command, _ []string) error {
 	}
 	if cfg.S3SessionToken == "" {
 		cfg.S3SessionToken = os.Getenv("SEANCE_S3_SESSION_TOKEN")
+	}
+	// Docker-friendly env fallbacks for the Elasticsearch sink credentials.
+	if cfg.ElasticsearchApiKey == "" {
+		cfg.ElasticsearchApiKey = os.Getenv("SEANCE_ELASTICSEARCH_API_KEY")
+	}
+	if cfg.ElasticsearchPassword == "" {
+		cfg.ElasticsearchPassword = os.Getenv("SEANCE_ELASTICSEARCH_PASSWORD")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

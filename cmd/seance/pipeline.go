@@ -20,6 +20,7 @@ import (
 	webhookrecvprovider "github.com/bugsyhewitt/seance/internal/ingestion/webhookrecv"
 	"github.com/bugsyhewitt/seance/internal/output"
 	csvsink "github.com/bugsyhewitt/seance/internal/output/csv"
+	essink "github.com/bugsyhewitt/seance/internal/output/elasticsearch"
 	outfile "github.com/bugsyhewitt/seance/internal/output/file"
 	"github.com/bugsyhewitt/seance/internal/output/ndjson"
 	s3sink "github.com/bugsyhewitt/seance/internal/output/s3"
@@ -324,6 +325,41 @@ func runPipeline(ctx context.Context, c config.Config) error {
 		}
 		fmt.Fprintf(os.Stderr, "séance: s3 alerting enabled — shipping findings (confidence >= %.2f, region=%s, prefix=%s) to bucket %s\n",
 			c.S3MinConfidence, regionDesc, prefixDesc, c.S3Bucket)
+	}
+
+	// Optional Elasticsearch alerting sink. When --elasticsearch-url is set,
+	// séance indexes each redacted Finding into an Elasticsearch (or OpenSearch)
+	// cluster via the REST Index API (POST /<index>/_doc) in addition to stdout —
+	// the ELK/OpenSearch-native path that doesn't need Logstash or a Beats agent.
+	// Construction-time validation (URL required, min-confidence in range) catches
+	// operator typos at startup rather than mid-run.
+	var esSink *essink.Sink
+	if c.ElasticsearchURL != "" {
+		var eserr error
+		esSink, eserr = essink.New(essink.Config{
+			URL:           c.ElasticsearchURL,
+			Index:         c.ElasticsearchIndex,
+			ApiKey:        c.ElasticsearchApiKey,
+			Username:      c.ElasticsearchUsername,
+			Password:      c.ElasticsearchPassword,
+			MinConfidence: c.ElasticsearchMinConfidence,
+			InsecureSkipVerify: c.ElasticsearchInsecure,
+			ErrLog:        os.Stderr,
+		})
+		if eserr != nil {
+			return fmt.Errorf("elasticsearch: %w", eserr)
+		}
+		sinks = append(sinks, esSink)
+		idxDesc := c.ElasticsearchIndex
+		if idxDesc == "" {
+			idxDesc = "seance-findings"
+		}
+		tlsDesc := "verify-tls"
+		if c.ElasticsearchInsecure {
+			tlsDesc = "INSECURE-skip-tls"
+		}
+		fmt.Fprintf(os.Stderr, "séance: elasticsearch alerting enabled — indexing findings (confidence >= %.2f, index=%s, %s) to %s\n",
+			c.ElasticsearchMinConfidence, idxDesc, tlsDesc, c.ElasticsearchURL)
 	}
 
 	for _, s := range sinks {
