@@ -253,3 +253,51 @@ multipart) and mirrors the Splunk HEC pattern almost exactly, so the incremental
 implementation effort is small. Completing the major SIEM sink set (Splunk + Elastic)
 means séance is a drop-in feed for essentially any enterprise security telemetry
 pipeline without a relay or agent.
+
+---
+
+## Item 10 — Kafka REST Proxy streaming sink (`--kafka-rest-url`)  ✅ IMPLEMENTED (R37)
+
+> Shipped: `--kafka-rest-url` / `--kafka-rest-topic` wire a new
+> `internal/output/kafkarest` sink that produces each redacted `Finding` to a
+> Kafka topic via the Confluent REST Proxy v2 HTTP API (POST /topics/{topic},
+> `Content-Type: application/vnd.kafka.json.v2+json`), also compatible with
+> Redpanda's HTTP Proxy and any conforming REST Proxy implementation. Zero new
+> Go dependencies — pure stdlib `net/http`. Authentication supports
+> `--kafka-rest-api-key` (Bearer token, takes precedence; Confluent Cloud
+> style) and `--kafka-rest-username` / `--kafka-rest-password` (HTTP Basic for
+> on-prem). `--kafka-rest-insecure` disables TLS verification for self-managed
+> deployments. `--kafka-rest-min-confidence` is the per-sink confidence gate.
+> `SEANCE_KAFKA_REST_API_KEY` and `SEANCE_KAFKA_REST_PASSWORD` are the
+> Docker-friendly env-var fallbacks. Same non-blocking, fail-open,
+> bounded-queue design as every other séance streaming sink; three new counters
+> on the metrics line: `kafka_rest_sent_total`, `kafka_rest_failed_total`,
+> `kafka_rest_dropped_total`. 15 tests in `internal/output/kafkarest`. README
+> updated with a full Kafka REST Proxy section.
+
+### What
+
+séance's streaming sink set covers all major SIEM/storage destinations
+(Splunk HEC, Elasticsearch/OpenSearch, S3, syslog, webhook). Kafka is the
+dominant real-time event bus in security data pipelines — it bridges séance to
+KSQL stream-processing, Flink, Spark Streaming, and any SIEM that consumes
+from Kafka (Elastic's Kafka input, Splunk Connect for Kafka). The roster's
+`next_planned` explicitly named this as the next streaming output sink after
+Elasticsearch.
+
+### How
+
+- New `internal/output/kafkarest` package implementing `output.Sink`: POST
+  each redacted `Finding` as `{"records": [{"value": <Finding>}]}` to
+  `<base>/topics/<topic>` using the Confluent REST Proxy v2 wire format.
+- Bounded queue + single background worker, fail-open on non-2xx and transport
+  errors — identical design to `splunkhec` and `elasticsearch`.
+- Bearer API key auth (Confluent Cloud) and HTTP Basic auth (on-prem) with
+  env-var Docker-friendly fallbacks.
+- Config struct fields, TOML tags, flag registration, merge logic, pipeline
+  wiring, and metrics counters all follow the established sink pattern.
+- README updated with full Kafka REST Proxy section.
+
+### Effort estimate
+
+Small — ~1 day. No new dependencies; clean, familiar pattern.

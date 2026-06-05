@@ -1119,6 +1119,81 @@ background worker; a slow or unreachable cluster drops overflow events (counted)
 logs errors to stderr rather than stalling the pipeline. Missing URL or an
 out-of-range `--elasticsearch-min-confidence` fail at startup, not mid-run.
 
+---
+
+### Kafka REST Proxy sink (`--kafka-rest-url`)
+
+When `--kafka-rest-url` is set, séance produces each redacted Finding to a Kafka
+topic via the **Confluent REST Proxy v2 HTTP API** — no Kafka client library, no
+Zookeeper client, no JVM dependency, zero new Go dependencies. The REST Proxy (or
+Redpanda HTTP Proxy) translates each HTTP POST into a real Kafka produce call
+broker-side. This makes séance a native Kafka feed for any streaming pipeline
+without changing `go.mod`.
+
+```bash
+# Minimal: Confluent REST Proxy on-prem or Redpanda HTTP Proxy
+seance \
+  --token $GITHUB_TOKEN \
+  --kafka-rest-url http://kafka-rest.example.com:8082 \
+  --kafka-rest-topic seance-findings
+```
+
+```bash
+# Confluent Cloud (Bearer API key) with confidence gating
+seance \
+  --token $GITHUB_TOKEN \
+  --kafka-rest-url https://pkc-xxxxx.us-east-1.aws.confluent.cloud:443 \
+  --kafka-rest-topic seance-findings \
+  --kafka-rest-api-key $SEANCE_KAFKA_REST_API_KEY \
+  --kafka-rest-min-confidence 0.85
+```
+
+```bash
+# On-prem REST Proxy with HTTP Basic auth and self-signed cert
+seance \
+  --token $GITHUB_TOKEN \
+  --kafka-rest-url https://kafka-rest.internal.example.com:8082 \
+  --kafka-rest-topic seance-findings \
+  --kafka-rest-username alice \
+  --kafka-rest-password $SEANCE_KAFKA_REST_PASSWORD \
+  --kafka-rest-insecure
+```
+
+| Flag | Description |
+|------|-------------|
+| `--kafka-rest-url` | Base URL of the Confluent REST Proxy or Redpanda HTTP Proxy (e.g. `http://kafka-rest.example.com:8082`). Empty (default) disables the sink. |
+| `--kafka-rest-topic` | Kafka topic to produce findings into. Required when `--kafka-rest-url` is set. |
+| `--kafka-rest-api-key` | API key for authentication, sent as `Authorization: Bearer <key>` (Confluent Cloud style). Takes precedence over username/password. The `SEANCE_KAFKA_REST_API_KEY` env var is the Docker-friendly fallback. |
+| `--kafka-rest-username` | Username for REST Proxy HTTP Basic auth. Ignored when `--kafka-rest-api-key` is set. |
+| `--kafka-rest-password` | Password for REST Proxy HTTP Basic auth. The `SEANCE_KAFKA_REST_PASSWORD` env var is the Docker-friendly fallback. |
+| `--kafka-rest-min-confidence` | Per-sink confidence floor (0.0–1.0). Only findings at or above this score are produced; complements `--min-confidence`. |
+| `--kafka-rest-insecure` | Skip TLS certificate verification. On-prem REST Proxy deployments often use self-signed or internal-CA certificates. Default false. |
+
+**Wire format.** Each POST follows the Confluent REST Proxy v2 produce schema:
+
+```
+POST /topics/{topic}
+Content-Type: application/vnd.kafka.json.v2+json
+
+{"records": [{"value": <redacted Finding object>}]}
+```
+
+**Properties.** Same non-blocking, fail-open, bounded-queue design as every other
+séance streaming sink: findings hand off to a 256-entry in-memory queue drained by a
+single background worker; a slow or unreachable REST Proxy drops overflow events
+(counted as `kafka_rest_dropped_total`) and logs errors to stderr rather than
+stalling the pipeline. Missing URL/topic or an out-of-range
+`--kafka-rest-min-confidence` fail at startup, not mid-run.
+
+**Metrics.** Three counters appear on the periodic stderr metrics line:
+`kafka_rest_sent_total`, `kafka_rest_failed_total`, `kafka_rest_dropped_total`.
+
+**TOML config keys.** `kafka_rest_url`, `kafka_rest_topic`, `kafka_rest_api_key`,
+`kafka_rest_username`, `kafka_rest_password`, `kafka_rest_min_confidence`,
+`kafka_rest_insecure`.
+
+---
+
 ### Inbound webhook receiver (`--webhook-listen`)
 
 For the lowest possible latency — and zero polling/rate-limit cost — séance can

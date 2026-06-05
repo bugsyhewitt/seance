@@ -210,6 +210,20 @@ func mergeConfig(fileCfg, parsed config.Config, changed map[string]bool) config.
 			out.ElasticsearchMinConfidence = parsed.ElasticsearchMinConfidence
 		case "elasticsearch-insecure":
 			out.ElasticsearchInsecure = parsed.ElasticsearchInsecure
+		case "kafka-rest-url":
+			out.KafkaRestURL = parsed.KafkaRestURL
+		case "kafka-rest-topic":
+			out.KafkaRestTopic = parsed.KafkaRestTopic
+		case "kafka-rest-api-key":
+			out.KafkaRestAPIKey = parsed.KafkaRestAPIKey
+		case "kafka-rest-username":
+			out.KafkaRestUsername = parsed.KafkaRestUsername
+		case "kafka-rest-password":
+			out.KafkaRestPassword = parsed.KafkaRestPassword
+		case "kafka-rest-min-confidence":
+			out.KafkaRestMinConfidence = parsed.KafkaRestMinConfidence
+		case "kafka-rest-insecure":
+			out.KafkaRestInsecure = parsed.KafkaRestInsecure
 		}
 	}
 	return out
@@ -282,6 +296,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.ElasticsearchPassword, "elasticsearch-password", cfg.ElasticsearchPassword, "password for Elasticsearch HTTP Basic auth; pair with --elasticsearch-username; SEANCE_ELASTICSEARCH_PASSWORD env var is the Docker-friendly fallback")
 	rootCmd.PersistentFlags().Float64Var(&cfg.ElasticsearchMinConfidence, "elasticsearch-min-confidence", cfg.ElasticsearchMinConfidence, "only index findings at or above this confidence (0.0-1.0); per-sink complement to --min-confidence; 0 ships everything")
 	rootCmd.PersistentFlags().BoolVar(&cfg.ElasticsearchInsecure, "elasticsearch-insecure", cfg.ElasticsearchInsecure, "skip TLS certificate verification on the Elasticsearch endpoint — self-managed clusters routinely use self-signed or internal-CA certificates; default false (verify)")
+	rootCmd.PersistentFlags().StringVar(&cfg.KafkaRestURL, "kafka-rest-url", cfg.KafkaRestURL, "produce each redacted finding to a Kafka topic via a Confluent REST Proxy v2 (or Redpanda HTTP Proxy) endpoint in addition to stdout — pure HTTP, zero Kafka client deps, compatible with any REST Proxy that speaks POST /topics/{topic}; e.g. 'http://kafka-rest.example.com:8082'; empty disables the sink")
+	rootCmd.PersistentFlags().StringVar(&cfg.KafkaRestTopic, "kafka-rest-topic", cfg.KafkaRestTopic, "Kafka topic to produce findings into; required when --kafka-rest-url is set; e.g. 'seance-findings'")
+	rootCmd.PersistentFlags().StringVar(&cfg.KafkaRestAPIKey, "kafka-rest-api-key", cfg.KafkaRestAPIKey, "API key for Kafka REST Proxy authentication, sent as 'Authorization: Bearer <key>' (Confluent Cloud style); takes precedence over --kafka-rest-username/--kafka-rest-password; SEANCE_KAFKA_REST_API_KEY env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().StringVar(&cfg.KafkaRestUsername, "kafka-rest-username", cfg.KafkaRestUsername, "username for REST Proxy HTTP Basic auth; pair with --kafka-rest-password; ignored when --kafka-rest-api-key is set")
+	rootCmd.PersistentFlags().StringVar(&cfg.KafkaRestPassword, "kafka-rest-password", cfg.KafkaRestPassword, "password for REST Proxy HTTP Basic auth; pair with --kafka-rest-username; SEANCE_KAFKA_REST_PASSWORD env var is the Docker-friendly fallback")
+	rootCmd.PersistentFlags().Float64Var(&cfg.KafkaRestMinConfidence, "kafka-rest-min-confidence", cfg.KafkaRestMinConfidence, "only produce findings at or above this confidence to Kafka (0.0-1.0); per-sink complement to --min-confidence; 0 ships everything")
+	rootCmd.PersistentFlags().BoolVar(&cfg.KafkaRestInsecure, "kafka-rest-insecure", cfg.KafkaRestInsecure, "skip TLS certificate verification on the REST Proxy endpoint — on-prem deployments often use self-signed certs; default false (verify)")
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
@@ -312,6 +333,13 @@ func runScan(_ *cobra.Command, _ []string) error {
 	}
 	if cfg.ElasticsearchPassword == "" {
 		cfg.ElasticsearchPassword = os.Getenv("SEANCE_ELASTICSEARCH_PASSWORD")
+	}
+	// Docker-friendly env fallbacks for the Kafka REST Proxy sink credentials.
+	if cfg.KafkaRestAPIKey == "" {
+		cfg.KafkaRestAPIKey = os.Getenv("SEANCE_KAFKA_REST_API_KEY")
+	}
+	if cfg.KafkaRestPassword == "" {
+		cfg.KafkaRestPassword = os.Getenv("SEANCE_KAFKA_REST_PASSWORD")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
