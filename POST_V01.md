@@ -256,6 +256,42 @@ pipeline without a relay or agent.
 
 ---
 
+## Item 11 — Developer-tool credential signatures: Vault, Databricks, Grafana, Linear, Doppler ✅ IMPLEMENTED (R37)
+
+> Shipped: five new rules added to `signatures/default.toml`: `hashicorp-vault-token`
+> (hvs./hvb. prefix, 24+ char body), `databricks-pat` (dapi + 32 hex chars),
+> `grafana-cloud-api-key` (glc_ prefix + base64 body + entropy 3.5),
+> `linear-api-key` (lin_api_ + 40+ alphanumeric chars), `doppler-service-token`
+> (dp.st. + exactly 43 alphanumeric chars). All five use structural prefix patterns
+> that keep false-positive rates negligible without entropy analysis (except Grafana
+> which adds an entropy gate for extra precision). 18 new tests in
+> `internal/scan/devtools_keys_test.go` covering detection, redaction, short-body
+> non-firing, and prose false-positive guards. README updated (Built-in coverage
+> section). All existing tests pass.
+
+### What
+
+séance's default ruleset covered AWS, GitHub, Stripe, Slack, SendGrid, Twilio,
+OpenAI, Anthropic, and Hugging Face. The fastest-growing class of enterprise
+secret leak in 2025-2026 is developer-toolchain credentials: secrets management
+tokens (Vault, Doppler), data-platform access tokens (Databricks), observability
+platform tokens (Grafana), and project-management API keys (Linear). All five
+have structurally-rigid, issuer-documented prefix patterns that make them
+high-precision targets — exactly the class seance's architecture targets.
+
+### How
+
+Five new `[[rules]]` blocks in `signatures/default.toml`:
+- `hashicorp-vault-token`: matches `hvs.` (service) or `hvb.` (batch) + 24+ chars
+- `databricks-pat`: matches `dapi` + exactly 32 lowercase hex chars
+- `grafana-cloud-api-key`: matches `glc_` + 32+ base64 chars, entropy gate 3.5
+- `linear-api-key`: matches `lin_api_` + 40+ alphanumeric chars
+- `doppler-service-token`: matches `dp.st.` + exactly 43 alphanumeric chars
+
+### Effort estimate
+
+Small — new TOML rules + tests only. No code change.
+
 ## Item 10 — Kafka REST Proxy streaming sink (`--kafka-rest-url`)  ✅ IMPLEMENTED (R37)
 
 > Shipped: `--kafka-rest-url` / `--kafka-rest-topic` wire a new

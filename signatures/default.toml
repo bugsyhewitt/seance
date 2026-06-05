@@ -167,6 +167,52 @@ keywords    = ["hf_"]
 tags        = ["ai", "huggingface"]
 entropy     = 3.5
 
+# ── HashiCorp / Vault ─────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "hashicorp-vault-token"
+description = "HashiCorp Vault service token (hvs.) or batch token (hvb.)"
+regex       = '''(?:hvs|hvb)\.[A-Za-z0-9_-]{24,}'''
+keywords    = ["hvs.", "hvb.", "VAULT_TOKEN"]
+tags        = ["cloud", "hashicorp", "vault"]
+
+# ── Databricks ────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "databricks-pat"
+description = "Databricks personal access token (dapi prefix)"
+regex       = '''dapi[a-f0-9]{32}'''
+keywords    = ["dapi"]
+tags        = ["cloud", "databricks"]
+
+# ── Grafana ────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "grafana-cloud-api-key"
+description = "Grafana Cloud / Grafana service account token (glc_ prefix)"
+regex       = '''glc_[A-Za-z0-9+/]{32,}(?:={0,2})'''
+keywords    = ["glc_"]
+tags        = ["cloud", "grafana"]
+entropy     = 3.5
+
+# ── Linear ────────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "linear-api-key"
+description = "Linear.app personal API key (lin_api_ prefix)"
+regex       = '''lin_api_[A-Za-z0-9]{40,}'''
+keywords    = ["lin_api_"]
+tags        = ["saas", "linear"]
+
+# ── Doppler ───────────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "doppler-service-token"
+description = "Doppler service token (dp.st. prefix)"
+regex       = '''dp\.st\.[A-Za-z0-9]{43}'''
+keywords    = ["dp.st."]
+tags        = ["saas", "doppler"]
+
 # ── Crypto / Private Keys ──────────────────────────────────────────────────────
 
 [[rules]]

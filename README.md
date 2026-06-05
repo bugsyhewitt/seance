@@ -1391,6 +1391,10 @@ types seen in real public-repo leaks:
   `sk-proj-`/`sk-svcacct-`), Anthropic (`sk-ant-`), and Hugging Face (`hf_`)
   tokens — the fastest-growing class of leaked credential in the 2024–2026
   landscape, where a live key bills the victim's account directly
+- **Developer-tool / cloud-native** — HashiCorp Vault service and batch tokens
+  (`hvs.`/`hvb.`), Databricks personal access tokens (`dapi`), Grafana Cloud
+  service account tokens (`glc_`), Linear.app API keys (`lin_api_`), Doppler
+  service tokens (`dp.st.`)
 - **Crypto** — PEM and PGP private-key blocks
 - **Generic** — a high-entropy `api_key = "…"` catch-all for everything else
 
