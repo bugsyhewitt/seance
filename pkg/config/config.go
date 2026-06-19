@@ -387,7 +387,7 @@ type Config struct {
 // Defaults returns a Config with sensible defaults.
 func Defaults() Config {
 	return Config{
-		Version:           "0.1.0-dev",
+		Version:           "1.0.0",
 		PollIntervalSec:   60,
 		MaxFilesPerCommit: 50,
 		ForcePush:         true,

@@ -2,7 +2,10 @@
 
 All notable changes to séance are documented here.
 
-## [Unreleased] — v0.2 in progress
+## [1.0.0] — 2026-06-19
+
+### Changed
+- Version constant bumped from `0.1.0-dev` to `1.0.0` (production-ready release).
 
 ### Added
 
