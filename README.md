@@ -182,14 +182,14 @@ on your `PATH`.
 **Go install** (requires Go 1.26+):
 
 ```bash
-go install github.com/bugsyhewitt/seance/cmd/seance@v0.1.0
+go install github.com/bugsyhewitt/seance/cmd/seance@v1.0.0
 ```
 
 **Docker**:
 
 ```bash
-docker pull ghcr.io/bugsyhewitt/seance:v0.1.0
-docker run --rm -e GITHUB_TOKEN=$GITHUB_TOKEN ghcr.io/bugsyhewitt/seance:v0.1.0
+docker pull ghcr.io/bugsyhewitt/seance:v1.0.0
+docker run --rm -e GITHUB_TOKEN=$GITHUB_TOKEN ghcr.io/bugsyhewitt/seance:v1.0.0
 ```
 
 **Build from source**:
