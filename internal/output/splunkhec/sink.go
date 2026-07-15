@@ -20,7 +20,6 @@ package splunkhec
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +29,7 @@ import (
 	"time"
 
 	"github.com/bugsyhewitt/seance/internal/output"
+	"github.com/bugsyhewitt/seance/internal/output/httpclient"
 )
 
 const (
@@ -120,8 +120,8 @@ func New(cfg Config) (*Sink, error) {
 	if cfg.Token == "" {
 		return nil, fmt.Errorf("splunk-hec: token is required")
 	}
-	if cfg.MinConfidence < 0 || cfg.MinConfidence > 1 {
-		return nil, fmt.Errorf("splunk-hec: min-confidence must be between 0.0 and 1.0, got %.2f", cfg.MinConfidence)
+	if err := output.ValidateConfidence("splunk-hec", cfg.MinConfidence); err != nil {
+		return nil, err
 	}
 
 	qsize := cfg.QueueSize
@@ -134,12 +134,7 @@ func New(cfg Config) (*Sink, error) {
 	}
 	client := cfg.Client
 	if client == nil {
-		// A fresh Transport (not DefaultTransport) so toggling InsecureSkipVerify
-		// for séance never mutates a shared global used by other code.
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
-		}
-		client = &http.Client{Timeout: timeout, Transport: tr}
+		client = httpclient.New(timeout, cfg.InsecureSkipVerify)
 	}
 
 	source := cfg.Source

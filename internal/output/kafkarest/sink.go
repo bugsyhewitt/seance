@@ -36,7 +36,6 @@ package kafkarest
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -47,6 +46,7 @@ import (
 	"time"
 
 	"github.com/bugsyhewitt/seance/internal/output"
+	"github.com/bugsyhewitt/seance/internal/output/httpclient"
 )
 
 const (
@@ -137,8 +137,8 @@ func New(cfg Config) (*Sink, error) {
 	if cfg.Topic == "" {
 		return nil, fmt.Errorf("kafka-rest: Topic is required")
 	}
-	if cfg.MinConfidence < 0 || cfg.MinConfidence > 1 {
-		return nil, fmt.Errorf("kafka-rest: min-confidence must be between 0.0 and 1.0, got %.2f", cfg.MinConfidence)
+	if err := output.ValidateConfidence("kafka-rest", cfg.MinConfidence); err != nil {
+		return nil, err
 	}
 
 	qsize := cfg.QueueSize
@@ -151,10 +151,7 @@ func New(cfg Config) (*Sink, error) {
 	}
 	client := cfg.Client
 	if client == nil {
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
-		}
-		client = &http.Client{Timeout: timeout, Transport: tr}
+		client = httpclient.New(timeout, cfg.InsecureSkipVerify)
 	}
 
 	// Build the topic URL: strip any trailing slash from the base, then append
