@@ -1,5 +1,9 @@
 # séance
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/bugsyhewitt/bugsyhewitt.github.io/main/public/cards/seance.jpg" alt="seance" width="680">
+</p>
+
 > *Listening to what the dead repos whisper.*
 
 séance watches the GitHub public commit stream and surfaces leaked credentials —
