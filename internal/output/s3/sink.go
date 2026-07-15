@@ -142,6 +142,7 @@ type Sink struct {
 	batchSize       int
 	batchBytes      int
 	flushInterval   time.Duration
+	timeout         time.Duration
 	client          *http.Client
 	errLog          io.Writer
 	now             func() time.Time
@@ -231,6 +232,7 @@ func New(cfg Config) (*Sink, error) {
 		batchSize:       batchSize,
 		batchBytes:      batchBytes,
 		flushInterval:   flushInterval,
+		timeout:         timeout,
 		client:          client,
 		errLog:          cfg.ErrLog,
 		now:             nowFn,
@@ -320,7 +322,7 @@ func (s *Sink) put(body []byte, count int) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, bytes.NewReader(body))
@@ -476,7 +478,7 @@ func (s *Sink) logf(format string, args ...any) {
 	if s.errLog == nil {
 		return
 	}
-	fmt.Fprintln(s.errLog, fmt.Sprintf(format, args...))
+	fmt.Fprintf(s.errLog, format+"\n", args...)
 }
 
 func hmacSHA256(key []byte, data string) []byte {

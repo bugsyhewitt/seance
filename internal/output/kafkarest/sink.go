@@ -116,6 +116,7 @@ type Sink struct {
 	password string
 	apiKey   string
 	minConf  float64
+	timeout  time.Duration
 	client   *http.Client
 	errLog   io.Writer
 
@@ -167,6 +168,7 @@ func New(cfg Config) (*Sink, error) {
 		password: cfg.Password,
 		apiKey:   cfg.APIKey,
 		minConf:  cfg.MinConfidence,
+		timeout:  timeout,
 		client:   client,
 		errLog:   cfg.ErrLog,
 		queue:    make(chan output.Finding, qsize),
@@ -213,7 +215,7 @@ func (s *Sink) produce(finding output.Finding) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.topicURL, bytes.NewReader(body))
@@ -271,5 +273,5 @@ func (s *Sink) logf(format string, args ...any) {
 	if s.errLog == nil {
 		return
 	}
-	fmt.Fprintln(s.errLog, fmt.Sprintf(format, args...))
+	fmt.Fprintf(s.errLog, format+"\n", args...)
 }

@@ -360,5 +360,5 @@ func (s *Sink) logf(format string, args ...any) {
 	if s.errLog == nil {
 		return
 	}
-	fmt.Fprintln(s.errLog, fmt.Sprintf(format, args...))
+	fmt.Fprintf(s.errLog, format+"\n", args...)
 }
