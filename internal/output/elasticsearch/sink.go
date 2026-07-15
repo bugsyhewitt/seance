@@ -84,14 +84,15 @@ type Config struct {
 // Sink POSTs Findings to an Elasticsearch cluster via a single background
 // worker fed by a bounded queue.
 type Sink struct {
-	url           string
-	index         string
-	apiKey        string
-	username      string
-	password      string
-	minConf       float64
-	client        *http.Client
-	errLog        io.Writer
+	url      string
+	index    string
+	apiKey   string
+	username string
+	password string
+	minConf  float64
+	timeout  time.Duration
+	client   *http.Client
+	errLog   io.Writer
 
 	queue  chan output.Finding
 	wg     sync.WaitGroup
@@ -142,6 +143,7 @@ func New(cfg Config) (*Sink, error) {
 		username: cfg.Username,
 		password: cfg.Password,
 		minConf:  cfg.MinConfidence,
+		timeout:  timeout,
 		client:   client,
 		errLog:   cfg.ErrLog,
 		queue:    make(chan output.Finding, qsize),
@@ -189,7 +191,7 @@ func (s *Sink) post(finding output.Finding) {
 
 	endpoint := fmt.Sprintf("%s/%s/_doc", s.url, s.index)
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -247,5 +249,5 @@ func (s *Sink) logf(format string, args ...any) {
 	if s.errLog == nil {
 		return
 	}
-	fmt.Fprintln(s.errLog, fmt.Sprintf(format, args...))
+	fmt.Fprintf(s.errLog, format+"\n", args...)
 }
