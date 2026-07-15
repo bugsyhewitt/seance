@@ -71,6 +71,7 @@ type Sink struct {
 	headers map[string]string
 	minConf float64
 	format  Format
+	timeout time.Duration
 	client  *http.Client
 	errLog  io.Writer
 
@@ -117,6 +118,7 @@ func New(cfg Config) *Sink {
 		headers: headers,
 		minConf: cfg.MinConfidence,
 		format:  format,
+		timeout: timeout,
 		client:  client,
 		errLog:  cfg.ErrLog,
 		queue:   make(chan output.Finding, qsize),
@@ -168,7 +170,7 @@ func (s *Sink) post(finding output.Finding) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(body))
@@ -223,5 +225,5 @@ func (s *Sink) logf(format string, args ...any) {
 	if s.errLog == nil {
 		return
 	}
-	fmt.Fprintln(s.errLog, fmt.Sprintf(format, args...))
+	fmt.Fprintf(s.errLog, format+"\n", args...)
 }

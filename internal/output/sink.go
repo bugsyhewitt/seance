@@ -8,6 +8,7 @@ package output
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -43,4 +44,14 @@ type Sink interface {
 	Emit(ctx context.Context, finding Finding) error
 	// Close flushes buffered output and releases resources.
 	Close() error
+}
+
+// ValidateConfidence returns an error if v is outside [0.0, 1.0]. name is the
+// sink or flag name included in the error message so the operator knows which
+// field is invalid. Call it in each sink's New() to consolidate the range check.
+func ValidateConfidence(name string, v float64) error {
+	if v < 0 || v > 1 {
+		return fmt.Errorf("%s: min-confidence must be between 0.0 and 1.0, got %.2f", name, v)
+	}
+	return nil
 }

@@ -44,7 +44,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -59,6 +58,7 @@ import (
 	"time"
 
 	"github.com/bugsyhewitt/seance/internal/output"
+	"github.com/bugsyhewitt/seance/internal/output/httpclient"
 )
 
 const (
@@ -168,8 +168,8 @@ func New(cfg Config) (*Sink, error) {
 	if cfg.SecretAccessKey == "" {
 		return nil, fmt.Errorf("s3: secret-access-key is required")
 	}
-	if cfg.MinConfidence < 0 || cfg.MinConfidence > 1 {
-		return nil, fmt.Errorf("s3: min-confidence must be between 0.0 and 1.0, got %.2f", cfg.MinConfidence)
+	if err := output.ValidateConfidence("s3", cfg.MinConfidence); err != nil {
+		return nil, err
 	}
 
 	region := cfg.Region
@@ -202,10 +202,7 @@ func New(cfg Config) (*Sink, error) {
 	}
 	client := cfg.Client
 	if client == nil {
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
-		}
-		client = &http.Client{Timeout: timeout, Transport: tr}
+		client = httpclient.New(timeout, cfg.InsecureSkipVerify)
 	}
 	nowFn := cfg.Now
 	if nowFn == nil {

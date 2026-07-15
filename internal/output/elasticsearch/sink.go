@@ -29,7 +29,6 @@ package elasticsearch
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +39,7 @@ import (
 	"time"
 
 	"github.com/bugsyhewitt/seance/internal/output"
+	"github.com/bugsyhewitt/seance/internal/output/httpclient"
 )
 
 const (
@@ -111,8 +111,8 @@ func New(cfg Config) (*Sink, error) {
 	if cfg.ApiKey == "" && (cfg.Username != "" && cfg.Password == "") {
 		return nil, fmt.Errorf("elasticsearch: password is required when username is set")
 	}
-	if cfg.MinConfidence < 0 || cfg.MinConfidence > 1 {
-		return nil, fmt.Errorf("elasticsearch: min-confidence must be between 0.0 and 1.0, got %.2f", cfg.MinConfidence)
+	if err := output.ValidateConfidence("elasticsearch", cfg.MinConfidence); err != nil {
+		return nil, err
 	}
 
 	index := cfg.Index
@@ -130,10 +130,7 @@ func New(cfg Config) (*Sink, error) {
 	}
 	client := cfg.Client
 	if client == nil {
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify},
-		}
-		client = &http.Client{Timeout: timeout, Transport: tr}
+		client = httpclient.New(timeout, cfg.InsecureSkipVerify)
 	}
 
 	s := &Sink{
